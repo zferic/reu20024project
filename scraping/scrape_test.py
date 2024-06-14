@@ -1,9 +1,10 @@
 import requests
 from bs4 import BeautifulSoup
 import os
- 
+import PyPDF2
+
 # URL from which pdfs to be downloaded
-url = "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC8295239/"
+url = "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7990518/"
  
 # Requests URL and get response object
 response = requests.get(url)
@@ -31,3 +32,11 @@ for link in pdf_links:
         
     with open(f"{folder_name}/{link.text}.pdf", 'wb') as f:
         f.write(pdf_response.content)
+    pdfFile = open('document.pdf', 'rb')
+    
+pdfReader = PyPDF2.PdfFileReader(pdfFile)
+
+text = ""
+for page in range(pdfReader.numPages):
+    pageObj = pdfReader.getPage(page)
+    text += pageObj.extractText()
