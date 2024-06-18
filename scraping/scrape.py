@@ -67,11 +67,10 @@ def download_paper(pmc_url, paper_title):
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
     }
     
-    try:
-        response = requests.get(pmc_url, headers=headers)
-        response.raise_for_status()
-    except requests.RequestException as e:
-        print(f"Failed to retrieve the page: {e}")
+    response = requests.get(pmc_url, headers=headers)
+    
+    if response.status_code != 200:
+        print(f"Failed to retrieve the page. Status code: {response.status_code}")
         return
     
     soup = BeautifulSoup(response.text, 'html.parser')
@@ -86,32 +85,29 @@ def download_paper(pmc_url, paper_title):
         if not pdf_url.startswith("http"):
             pdf_url = f"https://www.ncbi.nlm.nih.gov{pdf_url}"
         
-        try:
-            pdf_response = requests.get(pdf_url, headers=headers)
-            pdf_response.raise_for_status()
-            
+        pdf_response = requests.get(pdf_url, headers=headers)
+        
+        if pdf_response.status_code == 200:
             pdf_path = f"{paper_title}.pdf"
             with open(pdf_path, 'wb') as f:
                 f.write(pdf_response.content)
             print(f"Downloaded: {pdf_path}")
             
             extract_text_from_pdf(pdf_path)
-        except requests.RequestException as e:
-            print(f"Failed to download the PDF: {e}")
+        else:
+            print(f"Failed to download the PDF. Status code: {pdf_response.status_code}")
     else:
         print(f"No PDF found for: {paper_title}")
 
 def extract_text_from_pdf(pdf_path):
-    try:
-        with open(pdf_path, 'rb') as pdfFile:
-            pdfReader = PyPDF2.PdfReader(pdfFile)
-            text = ""
-            for page in range(len(pdfReader.pages)):
-                pageObj = pdfReader.pages[page]
-                text += pageObj.extract_text()
-            print(text)
-    except (FileNotFoundError, PyPDF2.utils.PdfReadError) as e:
-        print(f"Failed to extract text from PDF: {e}")
+    with open(pdf_path, 'rb') as pdfFile:
+        pdfReader = PyPDF2.PdfReader(pdfFile)
+        text = ""
+        for page in range(len(pdfReader.pages)):
+            pageObj = pdfReader.pages[page]
+            text += pageObj.extract_text()
+        
+        print(text)
 
 if __name__ == "__main__":
     scrape_page(current_url)
