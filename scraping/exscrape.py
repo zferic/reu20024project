@@ -2,6 +2,7 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse, parse_qs, urlencode, urlunparse
 import PyPDF2
+import os
 
 base_url = "https://pubmed.ncbi.nlm.nih.gov"
 search_url = "/?term=(p42es017198[Grant+Number])+OR+(p42+es017198[Grant+Number])&sort=date"
@@ -9,14 +10,18 @@ current_url = base_url + search_url
 
 def scrape_page(url):
     print("Scraping URL: " + url)
-    r = requests.get(url)
-    soup = BeautifulSoup(r.content, "html.parser")
-    paper_links = get_paper_links(soup, url)
-    for paper_link in paper_links:
-        extract_and_print_details(paper_link)
-    next_page_url = get_next_page_url(soup, url)
-    if next_page_url:
-        scrape_page(next_page_url)
+    try:
+        r = requests.get(url)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.content, "html.parser")
+        paper_links = get_paper_links(soup, url)
+        for paper_link in paper_links:
+            extract_and_print_details(paper_link)
+        next_page_url = get_next_page_url(soup, url)
+        if next_page_url:
+            scrape_page(next_page_url)
+    except requests.RequestException as e:
+        print(f"Failed to scrape the page: {e}")
 
 def get_paper_links(soup, search_url):
     links = soup.find_all('a', class_='docsum-title')
@@ -39,28 +44,32 @@ def get_next_page_url(soup, current_url):
     return next_page_url
 
 def extract_and_print_details(paper_url):
-    response = requests.get(paper_url)
-    soup = BeautifulSoup(response.text, 'html.parser')
-    title_tag = soup.find('h1', class_='heading-title')
-    title = title_tag.text.strip() if title_tag else 'N/A'
-    print(f"Article Title: {title}")
-    print(f"Article URL: {paper_url}")
-    author_tags = soup.find_all('a', class_='full-name')
-    authors = ", ".join([author.text for author in author_tags])
-    date_tag = soup.find('span', class_='cit')
-    publication_date = date_tag.text.strip() if date_tag else 'N/A'
-    print(f"  Authors: {authors}")
-    print(f"  Publication Date: {publication_date}")
-    
-    # Full text function 
-    full_text_url = soup.find('a', class_='link-item pmc')
-    if full_text_url:
-        full_text_url = full_text_url['href']
-        full_text_url = urljoin(base_url, full_text_url)
-        print(f"  Full Text URL: {full_text_url}")
-        download_paper(full_text_url, title)
-    
-    print("---")
+    try:
+        response = requests.get(paper_url)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+        title_tag = soup.find('h1', class_='heading-title')
+        title = title_tag.text.strip() if title_tag else 'N/A'
+        print(f"Article Title: {title}")
+        print(f"Article URL: {paper_url}")
+        author_tags = soup.find_all('a', class_='full-name')
+        authors = ", ".join([author.text for author in author_tags])
+        date_tag = soup.find('span', class_='cit')
+        publication_date = date_tag.text.strip() if date_tag else 'N/A'
+        print(f"  Authors: {authors}")
+        print(f"  Publication Date: {publication_date}")
+        
+        # Full text function 
+        full_text_url = soup.find('a', class_='link-item pmc')
+        if full_text_url:
+            full_text_url = full_text_url['href']
+            full_text_url = urljoin(base_url, full_text_url)
+            print(f"  Full Text URL: {full_text_url}")
+            download_paper(full_text_url, title)
+        
+        print("---")
+    except requests.RequestException as e:
+        print(f"Failed to retrieve article details: {e}")
 
 def download_paper(pmc_url, paper_title):
     headers = {
@@ -74,32 +83,34 @@ def download_paper(pmc_url, paper_title):
         print(f"Failed to retrieve the page: {e}")
         return
     
-    soup = BeautifulSoup(response.text, 'html.parser')
-    
-    pdf_link = soup.find('a', {'class': 'pdf-link'})
-    
-    if not pdf_link:
-        pdf_link = soup.find('a', {'href': lambda x: x and x.endswith('.pdf')})
-    
-    if pdf_link:
-        pdf_url = pdf_link['href']
-        if not pdf_url.startswith("http"):
-            pdf_url = f"https://www.ncbi.nlm.nih.gov{pdf_url}"
+    try:
+        soup = BeautifulSoup(response.text, 'html.parser')
+        pdf_link = soup.find('a', {'class': 'pdf-link'})
         
-        try:
-            pdf_response = requests.get(pdf_url, headers=headers)
-            pdf_response.raise_for_status()
+        if not pdf_link:
+            pdf_link = soup.find('a', {'href': lambda x: x and x.endswith('.pdf')})
+        
+        if pdf_link:
+            pdf_url = pdf_link['href']
+            if not pdf_url.startswith("http"):
+                pdf_url = f"https://www.ncbi.nlm.nih.gov{pdf_url}"
             
-            pdf_path = f"{paper_title}.pdf"
-            with open(pdf_path, 'wb') as f:
-                f.write(pdf_response.content)
-            print(f"Downloaded: {pdf_path}")
-            
-            extract_text_from_pdf(pdf_path)
-        except requests.RequestException as e:
-            print(f"Failed to download the PDF: {e}")
-    else:
-        print(f"No PDF found for: {paper_title}")
+            try:
+                pdf_response = requests.get(pdf_url, headers=headers)
+                pdf_response.raise_for_status()
+                
+                pdf_path = f"{paper_title}.pdf"
+                with open(pdf_path, 'wb') as f:
+                    f.write(pdf_response.content)
+                print(f"Downloaded: {pdf_path}")
+                
+                extract_text_from_pdf(pdf_path)
+            except requests.RequestException as e:
+                print(f"Failed to download the PDF: {e}")
+        else:
+            print(f"No PDF found for: {paper_title}")
+    except Exception as e:
+        print(f"Error processing PDF link: {e}")
 
 def extract_text_from_pdf(pdf_path):
     try:
@@ -110,8 +121,13 @@ def extract_text_from_pdf(pdf_path):
                 pageObj = pdfReader.pages[page]
                 text += pageObj.extract_text()
             print(text)
-    except (FileNotFoundError, PyPDF2.utils.PdfReadError) as e:
+    except (FileNotFoundError, PyPDF2.utils.PdfReadError, Exception) as e:
         print(f"Failed to extract text from PDF: {e}")
+    finally:
+        try:
+            os.remove(pdf_path)
+        except Exception as e:
+            print(f"Failed to delete the PDF file: {e}")
 
 if __name__ == "__main__":
     scrape_page(current_url)
