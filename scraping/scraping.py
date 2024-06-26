@@ -60,7 +60,7 @@ def extract_and_print_details(paper_url):
         print(f"  Authors: {authors}")
         print(f"  Publication Date: {publication_date}")
         
-     
+        # Full text function 
         full_text_url = soup.find('a', class_='link-item pmc')
         if full_text_url:
             full_text_url = full_text_url['href']
@@ -105,11 +105,11 @@ def download_paper(pmc_url, paper_title, authors, publication_date):
                     f.write(pdf_response.content)
                 print(f"Downloaded: {pdf_path}")
                 
-                sections = extract_text_from_pdf(pdf_path)
-                sections["Title"] = paper_title
-                sections["Authors"] = authors
-                sections["Publication Date"] = publication_date
-                print(sections)
+                text = extract_text_from_pdf(pdf_path)
+                if text:
+                    sections = find_sections(text)
+                    save_sections_to_file(paper_title, sections)
+                    
             except requests.RequestException as e:
                 print(f"Failed to download the PDF: {e}")
         else:
@@ -117,19 +117,26 @@ def download_paper(pmc_url, paper_title, authors, publication_date):
     except Exception as e:
         print(f"Error processing PDF link: {e}")
 
-def extract_text_from_pdf(pdf_path):
-    text_by_page = []
-    with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages:
-            text = page.extract_text()
-            if text:
-                text_by_page.append(text)
-    
-    sections = find_sections(text_by_page)
-    return sections
+def save_sections_to_file(paper_title, sections):
+    file_name = f"{paper_title}_sections.txt"
+    with open(file_name, 'w', encoding='utf-8') as f:
+        for section_name, section_text in sections.items():
+            f.write(f"### {section_name} ###\n\n")
+            f.write(section_text.strip() + "\n\n")
+    print(f"Saved sections to {file_name}")
 
-# Dictionary intialization
-def find_sections(text_by_page):
+def extract_text_from_pdf(pdf_path):
+    try:
+        text = ""
+        with pdfplumber.open(pdf_path) as pdf:
+            for page in pdf.pages:
+                text += page.extract_text(x_tolerance=1, y_tolerance=1) + "\n"
+        return text
+    except Exception as e:
+        print(f"Failed to extract text from PDF: {e}")
+        return None
+
+def find_sections(text):
     sections = {
         "Abstract": "",
         "Introduction": "",
@@ -138,34 +145,32 @@ def find_sections(text_by_page):
         "Discussion": "",
         "Conclusion": ""
     }
+    
     current_section = None
     section_text = ""
-
-    # Updated regex
+    
     section_patterns = {
-        "Abstract": re.compile(r'^\s*ABSTRACT\s*$', re.IGNORECASE),
-        "Introduction": re.compile(r'^\s*INTRODUCTION\s*$', re.IGNORECASE),
-        "Methods": re.compile(r'^\s*METHODS\s*$', re.IGNORECASE),
-        "Results": re.compile(r'^\s*RESULTS\s*$', re.IGNORECASE),
-        "Discussion": re.compile(r'^\s*DISCUSSION\s*$', re.IGNORECASE),
-        "Conclusion": re.compile(r'^\s*CONCLUSION\s*$', re.IGNORECASE),
-    }
-
-    for page_number, page in enumerate(text_by_page):
-        lines = page.split('\n')
+    "Abstract": re.compile(r'(?:^|\W)abstracts?(?:$|\W)', re.IGNORECASE),
+    "Introduction": re.compile(r'(?:^|\W)introductions?(?:$|\W)', re.IGNORECASE),
+    "Methods": re.compile(r'(?:^|\W)(?:materials?\s*(?:and|&|\+)\s*methods?|methods?)(?:$|\W)', re.IGNORECASE),
+    "Results": re.compile(r'(?:^|\W)results?(?:$|\W)', re.IGNORECASE),
+    "Discussion": re.compile(r'(?:^|\W)discussions?(?:$|\W)', re.IGNORECASE),
+    "Conclusion": re.compile(r'(?:^|\W)(?:conclusions?|in\s*conclusion)(?:$|\W)', re.IGNORECASE),
+}
+    
+    lines = text.split('\n')
+    
+    for line_number, line in enumerate(lines):
+        for section, pattern in section_patterns.items():
+            if pattern.match(line.strip()):
+                if current_section:
+                    sections[current_section] = section_text.strip()
+                current_section = section
+                section_text = ""
+                break
         
-        for line_number, line in enumerate(lines):
-            for section, pattern in section_patterns.items():
-                if pattern.match(line.strip()):
-                    if current_section:
-                        sections[current_section] = section_text.strip()
-                    current_section = section
-                    section_text = ""
-                    print(f"Found section {current_section} on page {page_number + 1}, line {line_number + 1}")
-                    break
-            
-            if current_section:
-                section_text += line + " "
+        if current_section:
+            section_text += line + "\n"
     
     if current_section:
         sections[current_section] = section_text.strip()
