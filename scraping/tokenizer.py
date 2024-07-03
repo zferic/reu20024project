@@ -1,36 +1,101 @@
 from transformers import AutoTokenizer
 import os
+import re
+from collections import Counter
+import torch
+from torch.utils.data import Dataset, DataLoader, ConcatDataset
+import matplotlib.pyplot as plt
 
 tokenizer = AutoTokenizer.from_pretrained("allenai/scibert_scivocab_uncased")
 
 def tokenize_file(file_path):
-    with open(file_path, 'r', encoding='utf-8') as file:
-        text = file.read()
-        
-        abstract_start = text.find("### Abstract ###")
-        if abstract_start == -1:
-            return []
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            text = file.read()
 
-        abstract_start += len("### Abstract ###")
-        abstract_end = text.find("###", abstract_start)
-        abstract_text = text[abstract_start:abstract_end].strip()
-        
-        tokens = tokenizer.tokenize(abstract_text)
-        return tokens
+            abstract_start = text.find("### Abstract ###")
+            if abstract_start == -1:
+                return []
+
+            abstract_start += len("### Abstract ###")
+            abstract_end = text.find("###", abstract_start)
+            abstract_text = text[abstract_start:abstract_end].strip()
+
+            sentences = re.split(r'\n+', abstract_text)
+
+            all_tokens = []
+            for sentence in sentences:
+                tokens = tokenizer.tokenize(sentence)
+                token_ids = tokenizer.convert_tokens_to_ids(tokens)
+                all_tokens.append(token_ids)
+            
+            return all_tokens
+    except Exception as e:
+        print(f"Error tokenizing file {file_path}: {e}")
+        return []
 
 def tokenize_directory(directory):
     tokenized_texts = {}
     for file_name in os.listdir(directory):
-         if file_name.endswith("_sections.txt"):
-             file_path = os.path.join(directory, file_name)
-             tokens = tokenize_file(file_path)
-             tokenized_texts[file_name] = tokens
+        if file_name.endswith("_sections.txt"):
+            file_path = os.path.join(directory, file_name)
+            tokens = tokenize_file(file_path)
+            tokenized_texts[file_name] = tokens
     return tokenized_texts
+
+class AutoregressiveDataset(Dataset):
+    def __init__(self, sentences_tokens):
+        self.sentences_tokens = sentences_tokens
+        self.data = self.create_sequences(sentences_tokens)
+
+    def create_sequences(self, sentences_tokens):
+        sequences = []
+        for tokens in sentences_tokens:
+            if len(tokens) > 1:  
+                input_sequence = tokens[:-1]
+                target_token = tokens[-1]
+                sequences.append((input_sequence, target_token))
+        return sequences
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        input_sequence, target_token = self.data[idx]
+        input_tensor = torch.tensor(input_sequence, dtype=torch.long)
+        target_tensor = torch.tensor(target_token, dtype=torch.long)
+        return input_tensor, target_tensor
 
 if __name__ == "__main__":
     directory = r"C:\Users\tiahi\NSF REU\tokenizing\downloaded_txts"
     tokenized_texts = tokenize_directory(directory)
-    for file_name, tokens in tokenized_texts.items():
-        print(f"Tokens for {file_name}:")
-        print(tokens)
-        print("---")
+    
+    cumulative_token_counts = Counter()
+    all_datasets = []
+
+    for file_name, sentences_tokens in tokenized_texts.items():
+        if sentences_tokens:
+            try:
+                dataset = AutoregressiveDataset(sentences_tokens)
+                all_datasets.append(dataset)
+
+                for tokens in sentences_tokens:
+                    alphanumeric_tokens = [token for token in tokens if tokenizer.convert_ids_to_tokens([token])[0].isalnum()]
+                    cumulative_token_counts.update(alphanumeric_tokens)
+            except Exception as e:
+                print(f"Error creating dataset for {file_name}: {e}")
+
+    combined_dataset = ConcatDataset(all_datasets)
+    torch.save(combined_dataset, 'line_split_ds.pt')
+    
+    top_10_tokens = cumulative_token_counts.most_common(10)
+    top_10_token_ids, top_10_counts = zip(*top_10_tokens)
+    top_10_token_strs = [tokenizer.convert_ids_to_tokens([token_id])[0] for token_id in top_10_token_ids]
+
+    # Plot the top 10 tokens
+    plt.figure(figsize=(10, 6))
+    plt.bar(top_10_token_strs, top_10_counts)
+    plt.xlabel('Tokens')
+    plt.ylabel('Frequency')
+    plt.title('Top 10 Tokens Across all Abstracts')
+    plt.show()
