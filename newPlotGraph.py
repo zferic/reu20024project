@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 
 # Base URL and initial search URL
 base_url = "https://pubmed.ncbi.nlm.nih.gov"
-search_url = "/?term=contaminant+fate+and+transport&sort=date&page=1"
+search_url = "/?term=(p42es017198%5BGrant%20Number%5D)%20OR%20(p42%20es017198%5BGrant%20Number%5D)&sort=date&size=200"
 current_url = base_url + search_url
 
 # Directory for saving the text files
