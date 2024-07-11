@@ -2,6 +2,7 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse, parse_qs, urlencode, urlunparse
 import re
+import os
 
 base_url = "https://pubmed.ncbi.nlm.nih.gov"
 search_url = "/?term=(p42es017198[Grant+Number])+OR+(p42+es017198[Grant+Number])&sort=date"
@@ -66,13 +67,13 @@ def extract_and_print_details(paper_url):
         print(f"  Authors: {authors}")
         print(f"  Publication Date: {publication_date}")
         
-        # Full text function 
+      
         full_text_url = soup.find('a', class_='link-item pmc')
         if full_text_url:
             full_text_url = full_text_url['href']
             full_text_url = urljoin(base_url, full_text_url)
             print(f"  Full Text URL: {full_text_url}")
-            parse_full_text(full_text_url, title)
+            parse_full_text(full_text_url, title, authors, publication_date)
         
         print("---")
     except requests.RequestException as e:
@@ -80,7 +81,7 @@ def extract_and_print_details(paper_url):
     except Exception as e:
         print(f"An error occurred while extracting details: {e}")
 
-def parse_full_text(full_text_url, paper_title):
+def parse_full_text(full_text_url, paper_title, authors, publication_date):
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
     }
@@ -90,7 +91,7 @@ def parse_full_text(full_text_url, paper_title):
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
         sections = extract_sections_from_html(soup)
-        save_sections_to_file(paper_title, sections)
+        save_sections_to_file(paper_title, authors, publication_date, sections)
     except requests.RequestException as e:
         print(f"Failed to retrieve the page: {e}")
     except Exception as e:
@@ -147,16 +148,23 @@ def extract_sections_from_html(soup):
 
     return sections
 
-def save_sections_to_file(paper_title, sections):
+def save_sections_to_file(paper_title, authors, publication_date, sections):
     try:
-        file_name = f"{paper_title}_sections.txt"
+        paper_title = re.sub(r'[\\/*?:"<>|]', "_", paper_title)
+        directory = r"C:\Users\tiahi\NSF REU\tokenizing\updated_txts"
+        os.makedirs(directory, exist_ok=True)
+        file_name = os.path.join(directory, f"{paper_title}_sections.txt")
         with open(file_name, 'w', encoding='utf-8') as f:
+            f.write(f"Title: {paper_title}\n")
+            f.write(f"Authors: {authors}\n")
+            f.write(f"Publication Date: {publication_date}\n\n")
             for section_name, section_text in sections.items():
                 f.write(f"### {section_name} ###\n\n")
                 f.write(section_text.strip() + "\n\n")
         print(f"Saved sections to {file_name}")
     except Exception as e:
         print(f"An error occurred while saving sections to file: {e}")
+
 
 if __name__ == "__main__":
     scrape_page(current_url)
