@@ -11,6 +11,7 @@ search_url = "/?term=%28p42es017198%5BGrant+Number%5D%29+OR+%28p42+es017198%5BGr
 current_url = base_url + search_url
 
 sections_presence = []  # Global list to store presence data
+skipped_papers_count = 0  # Global counter for skipped papers
 
 def scrape_page(url):
     print("Scraping URL: " + url)
@@ -56,6 +57,7 @@ def get_next_page_url(soup, current_url):
         return None
 
 def extract_and_print_details(paper_url):
+    global skipped_papers_count
     try:
         response = requests.get(paper_url)
         response.raise_for_status()
@@ -77,11 +79,15 @@ def extract_and_print_details(paper_url):
             full_text_url = urljoin(base_url, full_text_url)
             print(f"  Full Text URL: {full_text_url}")
             parse_full_text(full_text_url, title, authors, publication_date)
+        else:
+            skipped_papers_count += 1
         
         print("---")
     except requests.RequestException as e:
+        skipped_papers_count += 1
         print(f"Failed to retrieve article details: {e}")
     except Exception as e:
+        skipped_papers_count += 1
         print(f"An error occurred while extracting details: {e}")
 
 def parse_full_text(full_text_url, paper_title, authors, publication_date):
@@ -200,6 +206,7 @@ def save_sections_presence_to_csv(presence):
         print(f"An error occurred while saving sections presence to CSV: {e}")
 
 def create_bar_graph_from_csv():
+    global skipped_papers_count
     file_path = r"C:\Users\musak\OneDrive\REU Folder\Datascraping\sections_present.csv"
     section_counts = {
         "Abstract": 0,
@@ -208,7 +215,6 @@ def create_bar_graph_from_csv():
         "Results": 0,
         "Discussion": 0,
         "Conclusion": 0
-
     }
     
     try:
@@ -218,12 +224,14 @@ def create_bar_graph_from_csv():
                 for section in section_counts:
                     if row[section] == 'True':
                         section_counts[section] += 1
-        
+
+        section_counts["Skipped Papers"] = skipped_papers_count  # Add skipped papers to the count
+
         plt.figure(figsize=(10, 6))
         plt.bar(section_counts.keys(), section_counts.values(), color=['red'])
         plt.xlabel('Section')
         plt.ylabel('Count')
-        plt.title('Presence of Sections in PubMed Articles')
+        plt.title('Presence of Sections in PROTECT PubMed Articles')
         plt.xticks(rotation=45)
         plt.tight_layout()
         plt.savefig(r"C:\Users\musak\OneDrive\REU Folder\Datascraping\sections_presence_graph.png")
