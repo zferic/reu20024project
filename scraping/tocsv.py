@@ -6,8 +6,10 @@ import pandas as pd
 def extract_text(file_path):
     try:
         with open(file_path, 'r', encoding='utf-8') as file:
-            if file_path.endswith(".txt"):
+            if file_path.endswith(".txt") and not file_path.endswith(("_1.txt", "_2.txt", "_3.txt", "_4.txt", "_5.txt")):
+                print(file_path)
                 text = file.read()
+
             
                 title_match = re.search(r"Title:\s*(.*?)\s*(?=Authors:|Publication Date:|###|$)", text, re.DOTALL)
                 authors_match = re.search(r"Authors:\s*(.*?)\s*(?=Publication Date:|###|$)", text, re.DOTALL)
@@ -50,9 +52,11 @@ def extract_text(file_path):
 def extract_texts_from_directory(directory):
     texts = []
     for file_name in os.listdir(directory):
-        if file_name.endswith((".txt", ".json")):
+        if file_name.endswith(".txt") and not file_name.endswith(("_1.txt", "_2.txt", "_3.txt", "_4.txt", "_5.txt")):
             file_path = os.path.join(directory, file_name)
             text = extract_text(file_path)
+            print(file_name)
+            print(text)
             if text:
                 if isinstance(text, list):
                     texts.extend(text)
@@ -63,10 +67,11 @@ def extract_texts_from_directory(directory):
     return texts
 
 if __name__ == "__main__":
-    directory = r"C:\Users\tiahi\PROTECTRAG\Research-LLM\preprocessing\papers"  
+    directory = r"/media/zman/extrahd/reu20024project/papers/papers"  
     texts = extract_texts_from_directory(directory)
 
     for i, item in enumerate(texts):
+        
         if not isinstance(item, dict):
             print(f"Item at index {i} is not a dictionary: {item}")
 

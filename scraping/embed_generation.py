@@ -9,10 +9,17 @@ from tqdm import tqdm
 
 print("Initializing tokenizer and model...")
 start_time = time.time()
-tokenizer = AutoTokenizer.from_pretrained('sentence-transformers/allenai-specter', clean_up_tokenization_spaces=True)
-model = AutoModel.from_pretrained('sentence-transformers/allenai-specter')
+tokenizer = AutoTokenizer.from_pretrained('sentence-transformers/all-distilroberta-v1', clean_up_tokenization_spaces=True)
+model = AutoModel.from_pretrained('sentence-transformers/all-distilroberta-v1')
+
+# Send model to GPU if available
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
+
 init_time = time.time() - start_time
 print(f"Initialization completed in {init_time:.2f} seconds.\n")
+
+
 
 def chunk_text(text, max_tokens=512):
     tokens = tokenizer.encode(text)
@@ -26,15 +33,20 @@ def get_embedding_safe(text):
     if isinstance(text, str):
         text = text.replace("\n", " ")
         try:
-            text_chunks = chunk_text(text, max_tokens=512)
+            #text_chunks = chunk_text(text, max_tokens=512)
             embeddings = []
-            for chunk in text_chunks:
-                inputs = tokenizer(chunk, return_tensors='pt', truncation=True, max_length=512)
-                with torch.no_grad():
-                    outputs = model(**inputs)
-                embedding = outputs.pooler_output[0].cpu().numpy()  
-                embeddings.append(embedding)
-            return np.mean(embeddings, axis=0)
+            #print(text_chunks)
+            #for chunk in text_chunks:
+            inputs = tokenizer(text, return_tensors='pt', truncation=True, max_length=512).to(device)
+
+            with torch.no_grad():
+                outputs = model(**inputs)
+            #embedding = outputs.pooler_output[0].cpu().numpy() 
+            embedding = outputs.last_hidden_state.mean(dim=1)[0].cpu().numpy() 
+                #embedding = outputs.pooler_output[0].numpy()  
+            embeddings.append(embedding)
+            return embeddings[0]
+            #return np.mean(embeddings, axis=0)
         except Exception as e:
             print(f"An error occurred: {e}")
             return None
@@ -43,7 +55,7 @@ def get_embedding_safe(text):
 
 data_loading_start = time.time()
 print("Loading DataFrame from CSV...")
-df = pd.read_csv(r"C:\Users\tiahi\PROTECTRAG\Research-LLM\final_texts.csv")
+df = pd.read_csv(r"/media/zman/extrahd/reu20024project/scraping/final_texts.csv")
 data_loading_time = time.time() - data_loading_start
 print(f"DataFrame loaded in {data_loading_time:.2f} seconds.\n")
 
