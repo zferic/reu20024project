@@ -230,7 +230,7 @@ def main():
 
     from openai import OpenAI
 
-    api_key = "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"  
+    api_key = "OPENAI_API_KEY"  
     client = OpenAI(api_key=api_key)
     template = """<|begin_of_text|>
 <|start_header_id|>system<|end_header_id|>
