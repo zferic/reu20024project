@@ -268,7 +268,7 @@ def main():
         ]
     )
 
-    assistant_response = response['choices'][0]['message']['content']
+    assistant_response = response.choices[0].message.content
     print("Assistant Response from OpenAI:")
     print(assistant_response)
 
