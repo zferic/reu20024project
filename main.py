@@ -2,112 +2,160 @@ import os
 import pandas as pd
 import numpy as np
 from openai import OpenAI
-from dotenv import load_dotenv
 from transformers import AutoTokenizer, AutoModel
+from fastapi import FastAPI, Depends
+from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy import Column, Integer, Text, DateTime, func
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import torch
+import faiss
+import pickle
+import requests
 
-tokenizer = AutoTokenizer.from_pretrained('sentence-transformers/allenai-specter')
-model = AutoModel.from_pretrained('sentence-transformers/allenai-specter')
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+DATABASE_URL = "DATABASE_URL"
 
-api_key = "OPENAI_API_KEY"
-client = OpenAI(api_key=api_key)
+engine = create_async_engine(DATABASE_URL, echo=True)
+AsyncSessionLocal = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+Base = declarative_base()
 
-def get_embedding(text, model):
-    text = text.replace("\n", " ")
+class UserQuestion(Base):
+    __tablename__ = 'user_questions'
+    id = Column(Integer, primary_key=True, index=True)
+    question = Column(Text, nullable=False)
+    timestamp = Column(DateTime(timezone=True), server_default=func.now())
+
+class ModelResponse(Base):
+    __tablename__ = 'model_responses'
+    id = Column(Integer, primary_key=True, index=True)
+    question_id = Column(Integer)
+    response = Column(Text, nullable=False)
+    timestamp = Column(DateTime(timezone=True), server_default=func.now())
+
+class UserFeedback(Base):
+    __tablename__ = 'user_feedbacks'
+    id = Column(Integer, primary_key=True, index=True)
+    question_id = Column(Integer)
+    response_id = Column(Integer)
+    feedback = Column(Text)
+    timestamp = Column(DateTime(timezone=True), server_default=func.now())
+
+async def get_db():
+    async with AsyncSessionLocal() as session:
+        yield session
+
+executor = ThreadPoolExecutor()
+
+embeddings_file = r'C:\Users\tiahi\PROTECTRAG\Research-LLM\embeddings.pkl'
+if os.path.exists(embeddings_file):
+    with open(embeddings_file, 'rb') as f:
+        data = pickle.load(f)
+    embeddings = data['embeddings']
+    contexts = data['contexts']
+    faiss.normalize_L2(embeddings)
+    faiss_index = faiss.IndexFlatIP(embeddings.shape[1])
+    faiss_index.add(embeddings)
+else:
+    raise FileNotFoundError("Embeddings file not found. Please ensure embeddings.pkl exists.")
+
+def initialize_model_and_tokenizer(model_name='sentence-transformers/all-distilroberta-v1'):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModel.from_pretrained(model_name)
+    model.to(device)
+    return tokenizer, model, device
+
+def get_query_embedding(question, tokenizer, model, device):
+   
+    inputs = tokenizer(question, return_tensors="pt", truncation=True, padding=True, max_length=512).to(device)
+    with torch.no_grad():
+        outputs = model(**inputs)
+    question_embedding = outputs.last_hidden_state.mean(dim=1).cpu().numpy().flatten()
+    return question_embedding
+
+def retrieve_closest_texts(question, top_n=5):
+
+    tokenizer, model, device = initialize_model_and_tokenizer()
+    question_embedding = get_query_embedding(question, tokenizer, model, device).astype('float32')
+    faiss.normalize_L2(question_embedding.reshape(1, -1))
+    
+    distances, indices = faiss_index.search(question_embedding.reshape(1, -1), top_n)
+    
+    closest_texts = [contexts[i] for i in indices[0]]
+    
+    closest_texts_with_distances = [
+        (closest_texts[i], distances[0][i]) for i in range(len(closest_texts))
+    ]
+    
+    return closest_texts_with_distances
+
+
+def query(question):
+    prompt = (
+    "You are a helpful AI assistant who answers questions based on provided context. "
+    "The context includes titles, introductions, and results of research studies. "
+    "Include the titles of the papers and summaries of the studies in your responses. "
+    f"Answer the following question: {question}"
+)
+    
     try:
-        embedding = client.embeddings.create(input=[text], model=model).data[0].embedding
-        return np.array(embedding, dtype=np.float32)
-    except Exception as e:
-        print(f"An error occurred: {e}")
-        return None
-
-def chunk_text(text, max_tokens=8192):
-    words = text.split()
-    chunks = []
-    start = 0
-    while start < len(words):
-        end = min(start + max_tokens, len(words))
-        chunks.append(" ".join(words[start:end]))
-        start = end
-    return chunks
-
-def get_embedding_safe(text, model):
-    if isinstance(text, str):
-        text = text.replace("\n", " ")
-        try:
-            text_chunks = chunk_text(text, max_tokens=8192)
-            embeddings = []
-            for chunk in text_chunks:
-                embedding = client.embeddings.create(input=[chunk], model=model).data[0].embedding
-                embeddings.append(np.array(embedding, dtype=np.float32))
-            return np.mean(embeddings, axis=0)  
-        except Exception as e:
-            print(f"An error occurred: {e}")
-            return None
-    else:
-        return None
-
-df = pd.read_csv(r"C:\Users\tiahi\PROTECTRAG\Research-LLM\final_texts.csv")
-
-columns_to_process = ["title", "authors", "publication_date", "abstract", "introduction", "results", "discussion", "conclusion"]
-
-embeddings_dict = {col: [] for col in columns_to_process}
-
-for idx, row in df.iterrows():
-    for col in columns_to_process:
-        text = row[col]
-        embedding = get_embedding_safe(text, model)
-        embeddings_dict[col].append(embedding)
-
-embeddings_df = pd.DataFrame(embeddings_dict)
-for col in columns_to_process:
-    embeddings_df[col] = embeddings_df[col].apply(lambda emb: emb.tolist() if isinstance(emb, np.ndarray) else emb)
-
-embeddings_df.to_csv("embeddings.csv", index=False)
-print(f"Saved embeddings to 'embeddings.csv'")
-
-def query(question, max_context_length=4096):
-    question_embedding = get_embedding_safe(question, model)
-    
-    def fn(question_embedding, page_embedding):
-        if page_embedding is None:
-            return -np.inf
-        page_embedding = np.array(page_embedding, dtype=np.float32)
-        if page_embedding.size == 0:
-            return -np.inf
-        return np.dot(page_embedding, question_embedding)
-    
-    distances = []
-    for col in columns_to_process:
-        col_distance_series = embeddings_df.apply(lambda row: fn(question_embedding, row[col]), axis=1)
-        distances.append(col_distance_series)
-    
-    combined_distances = sum(distances)
-    combined_distances.sort_values(ascending=False, inplace=True)
-    
-    top_four_indices = combined_distances.index[:4]
-
-    contexts = []
-    for col in columns_to_process:
-        text_series = df.loc[top_four_indices, col]
-        contexts.extend(text_series.dropna().astype(str).tolist()) 
-
-    context = "\n\n".join(contexts)
-
-    if len(context) > max_context_length:
-        context = context[:max_context_length] + "..."
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": f"You are meant to answer queries with PROTECT initiative research from the data I have provided for you. Here is the context:\n\n{context}"},
-                {"role": "user", "content": question}
-            ]
+        response = requests.post(
+            "http://localhost:8001/generate",  
+            json={"prompt": prompt, "max_tokens": 512},
         )
-        return response.choices[0].message.content
+        response.raise_for_status()
+
+        response_data = response.json()
+        outputs = response_data.get("response", None)
+
+        if outputs is None:
+            raise ValueError("No 'response' field found in the server's output.")
+        
+        return outputs
+
     except Exception as e:
-        print(f"An error occurred: {e}")
-        return "Error: Unable to complete the query due to quota limitations."
+        print(f"Error: {e}")
+        return "Error: Unable to process the query."
 
 
-print(query("What have researches in PROTECT identified as leading causes of pre-term birth? Offer stats to back the claim and references"))
+async def query_async(question):
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(executor, query, question)
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class QueryRequest(BaseModel):
+    question: str
+
+@app.on_event("startup")
+async def on_startup():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+@app.post("/query")
+async def get_query_response(request: QueryRequest, db: AsyncSession = Depends(get_db)):
+    new_question = UserQuestion(question=request.question)
+    db.add(new_question)
+    await db.commit()
+    await db.refresh(new_question)
+
+    answer = await query_async(request.question)
+
+    new_response = ModelResponse(question_id=new_question.id, response=answer)
+    db.add(new_response)
+    await db.commit()
+    await db.refresh(new_response)
+
+    return {"answer": answer}
