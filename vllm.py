@@ -1,13 +1,11 @@
-from vllm import LLM, SamplingParams
 from fastapi import FastAPI
 from pydantic import BaseModel
-import torch 
+from vllm import LLM, SamplingParams
 
-print(torch.cuda.is_available())
 
 app = FastAPI()
-llm = LLM(model="meta-llama/Llama-3.2-1B-Instruct",
-          gpu_memory_utilization=0.9)  
+
+llm = LLM(model="meta-llama/Llama-3.2-1B-Instruct")
 print("Model loaded successfully.")
 
 class QueryRequest(BaseModel):
@@ -26,7 +24,7 @@ async def generate(request: QueryRequest):
         )
         
         outputs = llm.generate(request.prompt, sampling_params)
-        print("Outputs:", outputs)
+        print("vLLM raw outputs:", outputs)
 
         if outputs and len(outputs) > 0 and outputs[0].outputs and len(outputs[0].outputs) > 0:
             generated_text = outputs[0].outputs[0].text
