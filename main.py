@@ -126,8 +126,10 @@ def query(question):
     retrieved_contexts = retrieve_and_rerank(question)
     context = "\n\n".join([text for text, _ in retrieved_contexts])
     prompt = (
-        "You are a helpful AI assistant who answers questions based on provided context. "
-        f"Context: {context}\n\nQuestion: {question}"
+       "You are a helpful AI assistant who answers questions based on provided context. "
+     "The context includes titles, introductions, and results of research studies. "
+     "Include the titles of the papers and summaries of the studies in your responses. "
+     f"Answer the following question: {question}"
     )
     try:
         response = requests.post("http://localhost:8001/generate", json={"prompt": prompt, "max_tokens": 512})
