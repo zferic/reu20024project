@@ -11,10 +11,12 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy import Column, Integer, Text, DateTime, func
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-import torch
-import faiss
-import pickle
 import requests
+from langchain_community.vectorstores import FAISS
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.document_loaders import DirectoryLoader, TextLoader, UnstructuredFileLoader
+from sentence_transformers import CrossEncoder
+from langchain_huggingface import HuggingFaceEmbeddings
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 DATABASE_URL = "DATABASE_URL"
@@ -22,6 +24,19 @@ DATABASE_URL = "DATABASE_URL"
 engine = create_async_engine(DATABASE_URL, echo=True)
 AsyncSessionLocal = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 Base = declarative_base()
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# FastAPI app initialization
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class UserQuestion(Base):
     __tablename__ = 'user_questions'
@@ -50,99 +65,85 @@ async def get_db():
 
 executor = ThreadPoolExecutor()
 
-embeddings_file = r'C:\Users\tiahi\PROTECTRAG\Research-LLM\embeddings.pkl'
-if os.path.exists(embeddings_file):
-    with open(embeddings_file, 'rb') as f:
-        data = pickle.load(f)
-    embeddings = data['embeddings']
-    contexts = data['contexts']
-    faiss.normalize_L2(embeddings)
-    faiss_index = faiss.IndexFlatIP(embeddings.shape[1])
-    faiss_index.add(embeddings)
-else:
-    raise FileNotFoundError("Embeddings file not found. Please ensure embeddings.pkl exists.")
+def deduplicate_chunks(chunks):
+    """
+    Deduplicate document chunks based on their content.
+    """
+    seen = set()
+    unique_chunks = []
+    for chunk in chunks:
+        if chunk.page_content not in seen:
+            seen.add(chunk.page_content)
+            unique_chunks.append(chunk)
+    return unique_chunks
 
-def initialize_model_and_tokenizer(model_name='sentence-transformers/all-distilroberta-v1'):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModel.from_pretrained(model_name)
-    model.to(device)
-    return tokenizer, model, device
+async def async_initialize_vector_store():
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(executor, initialize_vector_store)
 
-def get_query_embedding(question, tokenizer, model, device):
-   
-    inputs = tokenizer(question, return_tensors="pt", truncation=True, padding=True, max_length=512).to(device)
-    with torch.no_grad():
-        outputs = model(**inputs)
-    question_embedding = outputs.last_hidden_state.mean(dim=1).cpu().numpy().flatten()
-    return question_embedding
 
-def retrieve_closest_texts(question, top_n=5):
+def initialize_vector_store():
+    try:
+        loader = DirectoryLoader(r'C:\Users\tiahi\PROTECTRAG\Research-LLM\papers', glob="**/*.txt", loader_cls=UnstructuredFileLoader)
+        documents = loader.load()
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+        splits = text_splitter.split_documents(documents)
 
-    tokenizer, model, device = initialize_model_and_tokenizer()
-    question_embedding = get_query_embedding(question, tokenizer, model, device).astype('float32')
-    faiss.normalize_L2(question_embedding.reshape(1, -1))
-    
-    distances, indices = faiss_index.search(question_embedding.reshape(1, -1), top_n)
-    
-    closest_texts = [contexts[i] for i in indices[0]]
-    
-    closest_texts_with_distances = [
-        (closest_texts[i], distances[0][i]) for i in range(len(closest_texts))
-    ]
-    
-    return closest_texts_with_distances
+        unique_splits = deduplicate_chunks(splits)
+        embeddings = HuggingFaceEmbeddings(model_name='sentence-transformers/all-distilroberta-v1')
+        vectorstore = FAISS.from_documents(unique_splits, embeddings)
+        return vectorstore
+    except Exception as e:
+        raise Exception(f"Failed to initialize vector store: {e}")
 
+
+
+reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+vectorstore = None
+
+@app.on_event("startup")
+async def startup_event():
+    global vectorstore
+    vectorstore = await async_initialize_vector_store()
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+
+def retrieve_and_rerank(question, top_k_retrieve=20, top_k_rerank=5):
+    try:
+        global vectorstore
+        initial_results = vectorstore.similarity_search_with_score(question, k=top_k_retrieve)
+        pairs = [(question, doc.page_content) for doc, _ in initial_results]
+        scores = reranker.predict(pairs)
+        scored_results = list(zip(initial_results, scores))
+        reranked_results = sorted(scored_results, key=lambda x: x[1], reverse=True)[:top_k_rerank]
+        return [(doc.page_content, score) for (doc, _), score in reranked_results]
+    except Exception as e:
+        print(f"Error in retrieve_and_rerank: {e}")
+        return []
 
 def query(question):
+    retrieved_contexts = retrieve_and_rerank(question)
+    context = "\n\n".join([text for text, _ in retrieved_contexts])
     prompt = (
-    "You are a helpful AI assistant who answers questions based on provided context. "
-    "The context includes titles, introductions, and results of research studies. "
-    "Include the titles of the papers and summaries of the studies in your responses. "
-    f"Answer the following question: {question}"
-)
-    
+        "You are a helpful AI assistant who answers questions based on provided context. "
+        f"Context: {context}\n\nQuestion: {question}"
+    )
     try:
-        response = requests.post(
-            "http://localhost:8001/generate",  
-            json={"prompt": prompt, "max_tokens": 512},
-        )
+        response = requests.post("http://localhost:8001/generate", json={"prompt": prompt, "max_tokens": 512})
         response.raise_for_status()
-
         response_data = response.json()
-        outputs = response_data.get("response", None)
-
-        if outputs is None:
-            raise ValueError("No 'response' field found in the server's output.")
-        
-        return outputs
-
+        return response_data.get("response", "No response received.")
     except Exception as e:
         print(f"Error: {e}")
         return "Error: Unable to process the query."
-
 
 async def query_async(question):
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(executor, query, question)
 
-app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 class QueryRequest(BaseModel):
     question: str
-
-@app.on_event("startup")
-async def on_startup():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
 
 @app.post("/query")
 async def get_query_response(request: QueryRequest, db: AsyncSession = Depends(get_db)):
@@ -159,3 +160,7 @@ async def get_query_response(request: QueryRequest, db: AsyncSession = Depends(g
     await db.refresh(new_response)
 
     return {"answer": answer}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
