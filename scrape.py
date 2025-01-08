@@ -23,8 +23,8 @@ def download_paper(pmc_url, paper_title):
     if pdf_link:
         pdf_url = pdf_link['href']
         if not pdf_url.startswith("http"):
-            pdf_url = f"https://www.ncbi.nlm.nih.gov{pdf_url}"
-        
+            pdf_url = f"{pmc_url}{pdf_url}" 
+        print(pdf_url)
         pdf_response = requests.get(pdf_url, headers=headers)
         
         if pdf_response.status_code == 200:
