@@ -4,6 +4,9 @@ from retrieval import RetrievalBenchmark
 from runner import BenchmarkRunner
 
 class TestRetrieval(unittest.TestCase):
+    """
+    The purpose of this TestCase class is to evaluate the RetrievalBenchamrker itself, not any specific method of retrieval
+    """
 
     def test_basic(self):
         """
