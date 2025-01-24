@@ -1,8 +1,6 @@
 import openai
 from openai_utils import *
-from typing import Optional
 import math
-
 
 def print_messages(messages):
     for m in messages:
@@ -12,7 +10,7 @@ class RetrievalBenchmark:
     """
     Allows for the benchmarking of retrieval through checks that retrieved documents contain the answer to a given question. This class is constructed using the prompt to be answered.
 
-    RetrievalBenchmark("What is 2 + 2").answeredBy("Two plus two is 4"]) > 0.99
+    RetrievalBenchmark("What is 2 + 2").answeredBy(["Two plus two is 4"]) > 0.99
 
     RetrievalBenchmark("What indicates that the molecular genotoxicity assay is suitable for detection")
         .answeredBy("The proposed molecular endpoints derived from the toxicogenomics assays, namely TELI 
@@ -62,7 +60,7 @@ class RetrievalBenchmark:
 
 
 
-    def answeredBy(self, document : str) -> float:
+    def _answeredBySingle(self, document : str) -> float:
         """
         Returns a probability, from 0 to 1, that the given document is needed to answer the user's prompt.
         """
@@ -93,8 +91,13 @@ only consider whether the document has the relevant information or not. Pay atte
             add_user_msg(messages, make_user_message(ex[0], ex[1]))
             add_model_msg(messages, ex[2])
         add_user_msg(messages, make_user_message(document, self.prompt))
-        print(messages)
         return self._get_true_probability(messages)
+    
+    def answeredBy(self, documents : list[str]) -> float:
+        prob_list = []
+        for doc in documents:
+            prob_list.append(self._answeredBySingle(doc))
+        return sum(prob_list) / len(prob_list)
 
 
 
