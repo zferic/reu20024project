@@ -1,12 +1,11 @@
-import openai
-from openai_utils import *
-import math
+import sys
+sys.path.append("./")
+from models.abstract import AbstractModel
+from utils.messages import MessageHistory
+from langchain_core.documents import Document
 
-def print_messages(messages):
-    for m in messages:
-        print(m)
 
-class RetrievalBenchmark:
+class PromptRetrievalJudge:
     """
     Allows for the benchmarking of retrieval through checks that retrieved documents contain the answer to a given question. This class is constructed using the prompt to be answered.
 
@@ -18,47 +17,9 @@ class RetrievalBenchmark:
                       suggesting that the molecular genotoxicity assay is suitable for genotoxicity detection.") > 0.99
     """
 
-    
-
-    MODEL = "gpt-4o-mini"
-
-
-    def __init__(self, prompt : str):
+    def __init__(self, prompt : str, model : AbstractModel):
         self.prompt = prompt
-        self.client = openai.OpenAI()
-
-    def _logprobs_to_true_prob(self, token_logprobs : list[tuple[str, float]]):
-        """
-        Given a list of token and logprob tuples, returns the probability of the word 'true' and variations
-        """
-        probability = 0
-        for token, logprob in token_logprobs:
-            if "true" in token.lower():
-                probability += math.e ** logprob
-        return probability
-
-
-    def _get_true_probability(self, messages : str) -> float:
-        """
-        Private helper method that calculates the probability of 'true' given the provided messages
-        """
-
-
-        res = self.client.chat.completions.create(
-            model = RetrievalBenchmark.MODEL,
-            messages= messages,
-            logprobs = True,
-            temperature=0,
-            top_logprobs=5
-        )
-
-        logprob_objs = res.choices[0].logprobs.content[0].top_logprobs
-        token_logprobs = []
-        for val in logprob_objs:
-            token_logprobs.append((val.token, val.logprob))
-        return self._logprobs_to_true_prob(token_logprobs)
-
-
+        self.model = model
 
     def _answeredBySingle(self, document : str) -> float:
         """
@@ -66,11 +27,11 @@ class RetrievalBenchmark:
         """
 
         SYS_PROMPT = """I want you to help benchmark my Retrieval Augmented Generation pipeline. I'm going to send you a user's prompt, or question, with a retrieved document that should contain information needed
-to provide a user a response. If the given document is in fact needed, reply with the word 'true'. If it is not, reply with 'false'. You should consider whether the provided prompt can be answered by common knowledge or not in your evaluation,
+to provide a user a response. If the given document is in fact needed, reply with the word 'true'. If it is not, reply with 'false'. You should not consider whether the provided prompt can be answered by common knowledge or not in your evaluation,
 only consider whether the document has the relevant information or not. Pay attention if the given document is relevant to the prompt but does not actually provide an answer to the user's question, this should be marked as 'false'.""" 
 
         def make_user_message(given_doc : str, given_question : str):
-            return f"Here is the document:\n{given_doc}\n\nHere is the question:\n{given_question}\n\nAnswer 'true' if the document contains information needed to answer the users question, and 'false' if it does not."
+            return f"Here is the document:\n{given_doc}\n\nHere is the question:\n{given_question}."
 
 
         EXAMPLES = [
@@ -81,22 +42,33 @@ only consider whether the document has the relevant information or not. Pay atte
              
              ["Participants were classified as current smokers, former smokers, or never-smokers based on self-report. Current smoking status was confirmed by measurement of plasma cotinine levels (>10 ng/mL). Pack-years were computed as (packs smoked per day) × (years of smoking).",
               "Does the metabolite cotinine have any psychoactive effect in smokers?",
+              "false"],
+
+             ["* Chen C, Wang X, Wang L, et al.  Effect of environmental tobacco smoke on levels of urinary hormone markers. Environ Health Perspect. 2005;113(4):412–417. doi: 10.1289/ehp.7436. [ DOI ] [ PMC free article ] [ PubMed ] [ Google Scholar ] (2005).",
+              "What is the effect of environmental tobacco smoke on levels of urinary hormone markers?",
               "false"]
         ]
 
 
-        messages = []
-        add_sys_msg(messages, SYS_PROMPT)
+        messages = MessageHistory(SYS_PROMPT)
         for ex in EXAMPLES:
-            add_user_msg(messages, make_user_message(ex[0], ex[1]))
-            add_model_msg(messages, ex[2])
-        add_user_msg(messages, make_user_message(document, self.prompt))
-        return self._get_true_probability(messages)
+            messages.add_user_message(make_user_message(ex[0], ex[1]))
+            messages.add_model_message(ex[2])
+        messages.add_user_message(make_user_message(document, self.prompt))
+        return self._true_probability(messages)
     
-    def answeredBy(self, documents : list[str]) -> float:
+    def _true_probability(self, messages : MessageHistory) -> float:
+        prob_dict = self.model.next_probabilities(messages)
+        true_sum = 0
+        for token in prob_dict:
+            if "true" in token.lower():
+                true_sum += prob_dict[token]
+        return true_sum
+
+    def answeredBy(self, documents : list[Document]) -> float:
         prob_list = []
         for doc in documents:
-            prob_list.append(self._answeredBySingle(doc))
+            prob_list.append(self._answeredBySingle(doc.page_content))
         return sum(prob_list) / len(prob_list)
 
 
