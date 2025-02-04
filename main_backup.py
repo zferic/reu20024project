@@ -1,0 +1,203 @@
+import os
+import pandas as pd
+import numpy as np
+from openai import OpenAI
+from transformers import AutoTokenizer, AutoModel
+from fastapi import FastAPI
+from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import logging
+import requests
+from langchain_community.vectorstores import FAISS
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.document_loaders import DirectoryLoader, TextLoader, UnstructuredFileLoader
+from sentence_transformers import CrossEncoder
+from langchain_huggingface import HuggingFaceEmbeddings
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+executor = ThreadPoolExecutor()
+def deduplicate_chunks(chunks):
+    """
+    Deduplicate document chunks based on their content.
+    """
+    seen = set()
+    unique_chunks = []
+    for chunk in chunks:
+        if chunk.page_content not in seen:
+            seen.add(chunk.page_content)
+            unique_chunks.append(chunk)
+    return unique_chunks
+async def async_initialize_vector_store():
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(executor, initialize_vector_store)
+
+import re
+# Function to extract sections from a paper
+def extract_sections(text):
+    abstract_match = re.search(r'### Abstract ###(.*?)### Introduction ###', text, re.DOTALL)
+    introduction_match = re.search(r'### Introduction ###(.*?)(###|$)', text, re.DOTALL)
+    methods_match = re.search(r'### Methods ###(.*?)(###|$)', text, re.DOTALL)
+    results_match = re.search(r'### Results ###(.*?)(###|$)', text, re.DOTALL)
+    conclusion_match = re.search(r'### Conclusion ###(.*?)(###|$)', text, re.DOTALL)
+    
+    abstract = abstract_match.group(1).strip() if abstract_match else ""
+    introduction = introduction_match.group(1).strip() if introduction_match else ""
+    methods = methods_match.group(1).strip() if methods_match else ""
+    results = results_match.group(1).strip() if results_match else ""
+    conclusion = conclusion_match.group(1).strip() if conclusion_match else ""
+    
+    return abstract, introduction, methods, results, conclusion
+
+def load_documents():
+    # Define the directory containing the text files
+    text_files_dir = "/media/zman/extrahd/reu20024project/preprocessing/docs"
+
+    # Initialize lists to store the extracted sections
+    abstracts = []
+    introductions = []
+    methods = []
+    results = []
+    conclusions = []
+
+    # Read all text files and extract sections
+    for filename in os.listdir(text_files_dir):
+        if filename.endswith(".txt"):
+            with open(os.path.join(text_files_dir, filename), 'r', encoding='utf-8') as file:
+                text = file.read()
+                abstract, introduction, method, result, conclusion = extract_sections(text)
+                
+                if len(abstract.strip()) > 100:
+                    abstracts.append({'text': abstract.replace('\n', ' ').strip(), 'source': f'{filename}: Abstract'})
+                
+                if len(introduction.strip()) > 100:
+                    introductions.append({'text': introduction.replace('\n', ' ').strip(), 'source': f'{filename}: Introduction'})
+                
+                if len(method.strip()) > 100:
+                    methods.append({'text': method.replace('\n', ' ').strip(), 'source': f'{filename}: Methods'})
+                
+                if len(result.strip()) > 100:
+                    results.append({'text': result.replace('\n', ' ').strip(), 'source': f'{filename}: Results'})
+                
+                if len(conclusion.strip()) > 100:
+                    conclusions.append({'text': conclusion.replace('\n', ' ').strip(), 'source': f'{filename}: Conclusion'})
+
+    from langchain.docstore.document import Document as LangchainDocument
+
+    RAW_KNOWLEDGE_BASE = [
+        LangchainDocument(page_content=doc["text"], metadata={"source": doc["source"]})
+    for doc in abstracts + introductions + methods + results + conclusions
+            ]
+    docs_processed = []
+    for doc in RAW_KNOWLEDGE_BASE:
+        docs_processed += text_splitter.split_documents([doc])
+
+
+    return RAW_KNOWLEDGE_BASE
+
+
+def initialize_vector_store():
+    """
+    Initialize or load a FAISS vector store.
+    If the FAISS index exists at the specified path, it will be loaded.
+    Otherwise, the index will be created and saved to the path.
+
+    :return: The initialized FAISS vector store.
+    """
+    index_path = '/media/zman/extrahd/reu20024project/faiss_index_500'  # Hardcoded index path
+    
+    try:
+        # Check if the FAISS index already exists
+        if os.path.exists(index_path):
+            logger.info(f"Loading existing FAISS index from {index_path}...")
+            vectorstore = FAISS.load_local(index_path, 
+                                           HuggingFaceEmbeddings(model_name='sentence-transformers/all-distilroberta-v1'),
+                                            allow_dangerous_deserialization=True  # Explicitly allow deserialization
+            )
+            logger.info("FAISS vector store loaded successfully.")
+        else:
+            logger.info("FAISS index not found. Creating a new index...")
+            loader = DirectoryLoader(r'/media/zman/extrahd/reu20024project/papers', glob="**/*.txt", loader_cls=UnstructuredFileLoader)
+            documents = loader.load()
+            text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+            splits = text_splitter.split_documents(documents)
+            unique_splits = deduplicate_chunks(splits)
+            logger.info("Creating FAISS index...")
+            embeddings = HuggingFaceEmbeddings(model_name='sentence-transformers/all-distilroberta-v1')
+            vectorstore = FAISS.from_documents(unique_splits, embeddings)
+            vectorstore.save_local(index_path)
+            logger.info(f"FAISS vector store created and saved to {index_path} successfully.")
+        
+        return vectorstore
+    except Exception as e:
+        logger.error(f"Failed to initialize vector store: {e}")
+        raise Exception(f"Failed to initialize vector store: {e}")
+    
+
+reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+vectorstore = None
+@app.on_event("startup")
+async def startup_event():
+    global vectorstore
+    vectorstore = await async_initialize_vector_store()
+
+
+def retrieve_and_rerank(question, top_k_retrieve=20, top_k_rerank=4):
+    try:
+        global vectorstore
+        initial_results = vectorstore.similarity_search_with_score(question, k=top_k_retrieve)
+        pairs = [(question, doc.page_content) for doc, _ in initial_results]
+        scores = reranker.predict(pairs)
+        scored_results = list(zip(initial_results, scores))
+        reranked_results = sorted(scored_results, key=lambda x: x[1], reverse=True)[:top_k_rerank]
+        return [(doc.page_content, score) for (doc, _), score in reranked_results]
+    except Exception as e:
+        print(f"Error in retrieve_and_rerank: {e}")
+        return []
+
+
+def query(question):
+    retrieved_contexts = retrieve_and_rerank(question)
+    contexts = "\n\n".join([f"Doc {i+1}: {text.strip()}" for i, (text, _) in enumerate(retrieved_contexts)])
+
+    prompt = (
+        "You are a helpful AI assistant who answers questions based on the provided context. "
+        "Do not change the question or ask your own questions."
+        "When applicable, base your answer entirely on the context provided."
+        "Include the titles of the papers where applicable.\n\n"
+        f"Context:\n{contexts}\n\nQuestion: {question}"
+    )
+
+
+    print("Context:", contexts)
+    print("Prompt:", prompt)
+    try:
+        response = requests.post("http://localhost:8001/generate", json={"prompt": prompt, "max_tokens": 1024})
+        response.raise_for_status()
+        response_data = response.json()
+        return response_data.get("response", "No response received.")
+    except Exception as e:
+        print(f"Error: {e}")
+        return "Error: Unable to process the query."
+async def query_async(question):
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(executor, query, question)
+class QueryRequest(BaseModel):
+    question: str
+@app.post("/query")
+async def get_query_response(request: QueryRequest):
+    answer = await query_async(request.question)
+    return {"answer": answer}
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
