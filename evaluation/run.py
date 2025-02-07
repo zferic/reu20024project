@@ -13,13 +13,15 @@ import matplotlib.pyplot as plt
 from matplotlib.transforms import Bbox
 import numpy as np
 
+CONTROL = "Control"
+SCORES = "scores"
+RANDOM = "Random"
+
 def transform_data():
     """
     Scales data such that a perfect performance is scaled to the contorl
     """
-    CONTROL = "Control"
-    SCORES = "scores"
-    RANDOM = "Random"
+
     evaluation = load_data()
     control_scores = np.array(evaluation[CONTROL][SCORES])
     random_scores = np.array(evaluation[RANDOM][SCORES])
@@ -116,8 +118,50 @@ def run():
     evaluation = runner.eval()
     json.dump(evaluation, open("random.json", "w"))
 
+def pass_rate():
+    """
+    Refactors evaluation.json into pass/fail data
+    """
+    thresholds = [0.5, 0.6, 0.7]
+    data = load_data()
+    names = list(data.keys())
+
+    num_thresholds = len(thresholds)
+    x = np.arange(len(names)) 
+
+    bar_width = 0.1  
+    offsets = np.linspace(-bar_width*(num_thresholds-1)/2, 
+                        bar_width*(num_thresholds-1)/2, 
+                        num_thresholds)
+
+    for i, t in enumerate(thresholds):
+        pass_rates = []
+        for name in names:
+            scores = np.array(data[name][SCORES])
+            pass_rates.append(np.average(np.where(scores >= t, True, False)))
+        bars = plt.bar(x + offsets[i], pass_rates, width=bar_width, label=f"{t*100:.0f}%")
+        for bar in bars:
+            y_val = bar.get_height()
+            x_val = bar.get_x() + bar.get_width() / 2
+            plt.text(x_val + 0.01, 
+                    y_val + 0.01,         
+                    f"{y_val*100:.1f}%" ,
+                    ha='center',
+                    va='bottom',
+                    fontsize=9)
+
+    plt.xticks(x, names) 
+    plt.gca().yaxis.set_major_formatter(mtick.PercentFormatter(1.0))
+    plt.xlabel('Retrieval Method')
+    plt.ylabel('Pass Rate')
+    plt.title('Pass Rates for Different Thresholds')
+    plt.legend(title = "Threshold")
+    plt.show()
+    
+
+
 
 
 
 if __name__ == "__main__":
-    plot(transform_data())
+    pass_rate()
