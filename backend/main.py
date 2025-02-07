@@ -11,6 +11,8 @@ from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from sentence_transformers import CrossEncoder
 import uvicorn
+import requests
+from fastapi.responses import StreamingResponse
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 logging.basicConfig(level=logging.INFO)
@@ -51,10 +53,14 @@ def initialize_vector_store():
 
         if os.path.exists(index_path):
             logger.info("Loading existing FAISS index...")
-            vectorstore = FAISS.load_local(index_path, embeddings)
+            vectorstore = FAISS.load_local(
+                index_path, 
+                embeddings,
+                allow_dangerous_deserialization=True
+            )
         else:
             logger.info("Creating new FAISS index...")
-            loader = DirectoryLoader(r"C:\Users\tiahi\PROTECTRAG\Research-LLM\papers", glob="**/*.txt")
+            loader = DirectoryLoader(r"C:\\Users\\tiahi\\PROTECTRAG\\Research-LLM\\papers", glob="**/*.txt")
             documents = loader.load()
             text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
             splits = text_splitter.split_documents(documents)
@@ -80,12 +86,25 @@ async def startup_event():
     global vectorstore
     vectorstore = await async_initialize_vector_store()
 
-def retrieve_and_rerank(question, top_k_retrieve=20, top_k_rerank=5):
+async def retrieve_and_rerank(question, top_k_retrieve=20, top_k_rerank=5):
     try:
         global vectorstore
-        initial_results = vectorstore.similarity_search_with_score(question, k=top_k_retrieve)
+        # Run similarity search in executor to prevent blocking
+        loop = asyncio.get_event_loop()
+        initial_results = await loop.run_in_executor(
+            executor,
+            lambda: vectorstore.similarity_search_with_score(question, k=top_k_retrieve)
+        )
+        
+        # Prepare pairs for reranking
         pairs = [(question, doc.page_content) for doc, _ in initial_results]
-        scores = reranker.predict(pairs)
+        
+        # Run reranking in executor
+        scores = await loop.run_in_executor(
+            executor,
+            lambda: reranker.predict(pairs)
+        )
+        
         scored_results = list(zip(initial_results, scores))
         reranked_results = sorted(scored_results, key=lambda x: x[1], reverse=True)[:top_k_rerank]
         return [(doc.page_content, score) for (doc, _), score in reranked_results]
@@ -93,22 +112,38 @@ def retrieve_and_rerank(question, top_k_retrieve=20, top_k_rerank=5):
         logger.error(f"Error in retrieve_and_rerank: {e}")
         return []
 
-def query(question):
-    retrieved_contexts = retrieve_and_rerank(question)
-    context = "\n\n".join([text for text, _ in retrieved_contexts])
-    return f"Answer based on context: {context}"
+async def query(question: str):
+    try:
+        results = await retrieve_and_rerank(question)
+        contexts = [text for text, _ in results]
+        
+        # Make request to generator API
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            executor,
+            lambda: requests.post(
+                "http://localhost:8001/generate",
+                json={
+                    "prompt": question,
+                    "context": contexts
+                }
+            )
+        )
+        
+        response_data = response.json()
+        return response_data.get("response", "No response received.")
+    except Exception as e:
+        logger.error(f"Error in query: {e}")
+        return "Error: Unable to complete the query."
 
-async def query_async(question):
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(executor, query, question)
-
+# Remove streaming endpoint as it's not needed with the generator API
 class QueryRequest(BaseModel):
     question: str
 
 @app.post("/query")
 async def get_query_response(request: QueryRequest):
     try:
-        answer = await query_async(request.question)
+        answer = await query(request.question)
         return {"answer": answer}
     except Exception as e:
         logger.error(f"Error processing query: {e}")
