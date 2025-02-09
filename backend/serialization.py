@@ -1,9 +1,6 @@
 from langchain_core.documents import Document
-
-
 PAGE_CONTENT = "page_content"
 METADATA = "metadata"
-
 def serialize_context(context : list[Document]) -> list[dict]:
     serialized = []
     for doc in context:
@@ -12,8 +9,6 @@ def serialize_context(context : list[Document]) -> list[dict]:
         doc_serialized[METADATA] = doc.metadata
         serialized.append(doc_serialized)
     return serialized
-
-
 def deserialize_context(serialized : list[dict]) -> Document:
     documents = []
     for doc_serialized in serialized:
