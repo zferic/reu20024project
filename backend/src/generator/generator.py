@@ -1,8 +1,8 @@
 import sys
 from langchain_core.documents import Document
 sys.path.append("./")
-from models.abstract import AbstractModel
-from models.huggingface import HuggingfaceModel, ModelNames
+from src.models.abstract import AbstractModel
+from src.models.huggingface import HuggingfaceModel, ModelNames
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List

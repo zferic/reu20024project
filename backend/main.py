@@ -2,6 +2,8 @@ import os
 import asyncio
 import logging
 from fastapi import FastAPI
+import sys
+sys.path.append("../")
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from concurrent.futures import ThreadPoolExecutor
@@ -10,16 +12,26 @@ from langchain_community.document_loaders import DirectoryLoader
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from sentence_transformers import CrossEncoder
+from langchain_core.documents import Document
 import uvicorn
 import requests
 from fastapi.responses import StreamingResponse
+from typing import List
+from src.models.huggingface import HuggingfaceModel, ModelNames
+from src.generator import Generator
+from src.retriever import RerankingRetriever, EmbeddingRetriever
+from backend.serialization import serialize_context
 
+class GenerateRequest(BaseModel):
+    prompt: str
+    context: List[str]
+class QueryRequest(BaseModel):
+    question: str
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
+retriever = RerankingRetriever(EmbeddingRetriever(docs_path= "...", vectors_path="...", logger=logger), first_pass_n = 20)
 app = FastAPI()
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
@@ -27,96 +39,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 executor = ThreadPoolExecutor()
-
-def deduplicate_chunks(chunks):
-    """
-    Deduplicate document chunks based on their content.
-    """
-    seen = set()
-    unique_chunks = []
-    for chunk in chunks:
-        if chunk.page_content not in seen:
-            seen.add(chunk.page_content)
-            unique_chunks.append(chunk)
-    return unique_chunks
-
-async def async_initialize_vector_store():
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(executor, initialize_vector_store)
-
-def initialize_vector_store():
-    try:
-        index_path = "./faiss_index"
-        embeddings = HuggingFaceEmbeddings(model_name='sentence-transformers/all-distilroberta-v1')
-
-        if os.path.exists(index_path):
-            logger.info("Loading existing FAISS index...")
-            vectorstore = FAISS.load_local(
-                index_path, 
-                embeddings,
-                allow_dangerous_deserialization=True
-            )
-        else:
-            logger.info("Creating new FAISS index...")
-            loader = DirectoryLoader(r"C:\\Users\\tiahi\\PROTECTRAG\\Research-LLM\\papers", glob="**/*.txt")
-            documents = loader.load()
-            text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-            splits = text_splitter.split_documents(documents)
-            unique_splits = deduplicate_chunks(splits)
-
-            logger.info("Indexing documents...")
-            vectorstore = FAISS.from_documents(unique_splits, embeddings)
-            vectorstore.save_local(index_path)
-
-        logger.info("FAISS vector store ready.")
-        return vectorstore
-    except Exception as e:
-        logger.error(f"Failed to initialize vector store: {e}")
-        raise Exception(f"Failed to initialize vector store: {e}")
-
-# reranking
-reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
-vectorstore = None
-
-# initialize vectorstore
-@app.on_event("startup")
-async def startup_event():
-    global vectorstore
-    vectorstore = await async_initialize_vector_store()
-
-async def retrieve_and_rerank(question, top_k_retrieve=20, top_k_rerank=5):
-    try:
-        global vectorstore
-        # Run similarity search in executor to prevent blocking
-        loop = asyncio.get_event_loop()
-        initial_results = await loop.run_in_executor(
-            executor,
-            lambda: vectorstore.similarity_search_with_score(question, k=top_k_retrieve)
-        )
-        
-        # Prepare pairs for reranking
-        pairs = [(question, doc.page_content) for doc, _ in initial_results]
-        
-        # Run reranking in executor
-        scores = await loop.run_in_executor(
-            executor,
-            lambda: reranker.predict(pairs)
-        )
-        
-        scored_results = list(zip(initial_results, scores))
-        reranked_results = sorted(scored_results, key=lambda x: x[1], reverse=True)[:top_k_rerank]
-        return [(doc.page_content, score) for (doc, _), score in reranked_results]
-    except Exception as e:
-        logger.error(f"Error in retrieve_and_rerank: {e}")
-        return []
-
 async def query(question: str):
     try:
-        results = await retrieve_and_rerank(question)
-        contexts = [text for text, _ in results]
-        
+        context = retriever(question, n = 5)
+        serialized = serialize_context(context)
         # Make request to generator API
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(
@@ -125,21 +52,16 @@ async def query(question: str):
                 "http://localhost:8001/generate",
                 json={
                     "prompt": question,
-                    "context": contexts
+                    "context": serialized
                 }
             )
         )
-        
         response_data = response.json()
         return response_data.get("response", "No response received.")
     except Exception as e:
         logger.error(f"Error in query: {e}")
         return "Error: Unable to complete the query."
-
 # Remove streaming endpoint as it's not needed with the generator API
-class QueryRequest(BaseModel):
-    question: str
-
 @app.post("/query")
 async def get_query_response(request: QueryRequest):
     try:
@@ -148,6 +70,5 @@ async def get_query_response(request: QueryRequest):
     except Exception as e:
         logger.error(f"Error processing query: {e}")
         return {"error": "Unable to process the query."}
-
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000, ssl_certfile="./cert.pem", ssl_keyfile="./key.pem")

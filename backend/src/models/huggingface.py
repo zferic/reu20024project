@@ -1,7 +1,7 @@
 from transformers import pipeline
 import sys
 sys.path.append("./")
-from models.abstract import AbstractModel
+from src.models.abstract import AbstractModel
 from utils.device import get_device
 from utils.messages import MessageHistory
 import json
