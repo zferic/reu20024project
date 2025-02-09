@@ -11,4 +11,9 @@ class AbstractRetriever:
         """
         ...
 
-    
+
+    def format(context : list[Document]) -> str:
+        """
+        Formats a retrieved list of documents as a single string
+        """
+        return "\n\n".join([c.page_content for c in context])

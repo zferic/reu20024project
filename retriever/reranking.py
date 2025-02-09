@@ -13,12 +13,13 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.documents import Document
 import torch
 sys.path.append("./")
-from retriever.embedding import EmbeddingRetriever
 from retriever.abstract import AbstractRetriever
 from utils.device import get_device
+from typing import Optional
+from logging import Logger
 
 DIR = "retriever"
-class RerankingRetriever(EmbeddingRetriever):
+class RerankingRetriever(AbstractRetriever):
 
     """
     Retriever which first uses an inner retriever, fetching `first_pass_n` number of documents (which is passed in through the constructor), before 
