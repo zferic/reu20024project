@@ -19,7 +19,7 @@ from fastapi.responses import StreamingResponse
 from typing import List
 from src.models.huggingface import HuggingfaceModel, ModelNames
 from src.generator import Generator
-from src.retriever import RerankingRetriever, EmbeddingRetriever
+from retriever import RerankingRetriever, EmbeddingRetriever
 from backend.serialization import serialize_context
 
 class GenerateRequest(BaseModel):
