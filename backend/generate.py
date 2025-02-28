@@ -4,7 +4,7 @@ sys.path.append("./")
 from src.generator import Generator
 from src.models.abstract import AbstractModel
 from src.models.huggingface import HuggingfaceModel, ModelNames
-from serialization import deserialize_context
+from backend.src.serialization.serialization import deserialize_context
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List

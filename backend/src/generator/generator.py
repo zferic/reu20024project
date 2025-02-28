@@ -1,8 +1,9 @@
 import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from langchain_core.documents import Document
-sys.path.append("./")
-from src.models.abstract import AbstractModel
-from src.models.huggingface import HuggingfaceModel, ModelNames
+from backend.src.models.abstract import AbstractModel
+from backend.src.models.huggingface import HuggingfaceModel, ModelNames
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List
@@ -51,6 +52,7 @@ async def generate_response(request: GenerateRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
+    print("Starting generator server on port 8001...")
     uvicorn.run(app, host="0.0.0.0", port=8001)
 
 
