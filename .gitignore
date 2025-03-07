@@ -2,6 +2,26 @@
 node_modules/
 venv/
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
 # Environment
 .env
 .env.local
@@ -16,14 +36,57 @@ evaluation/
 preprocessing/
 qastuff/
 
-
+# Data and Cache
 /papers
+/backend/vectors
+/backend/vectorstore/
+*.pkl
+*.bin
+*.index
+*.faiss
+*.npy
+*.npz
+*.h5
+*.hdf5
+*.pth
+*.pt
+*.ckpt
+*.bin
+*.model
+*.joblib
+*.cache
+.cache/
+__pycache__/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
 
 # Logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+*.log
+logs/
+log/
 
 # IDE
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
