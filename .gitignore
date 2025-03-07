@@ -40,6 +40,7 @@ qastuff/
 /papers
 /backend/vectors
 /backend/vectorstore/
+/backend/faiss_index/
 *.pkl
 *.bin
 *.index
