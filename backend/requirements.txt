@@ -13,6 +13,7 @@ attrs==24.2.0
 backcall==0.2.0
 backoff==2.2.1
 beautifulsoup4==4.12.3
+bitsandbytes==0.43.1
 bleach==6.1.0
 bs4==0.0.2
 certifi==2024.8.30
@@ -116,6 +117,7 @@ olefile==0.47
 openai==1.48.0
 opencv-python-headless==4.10.0.84
 openpyxl==3.1.5
+optimum==1.18.1
 orjson==3.10.12
 outlines==0.0.46
 packaging==24.1
