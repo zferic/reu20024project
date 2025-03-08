@@ -1,28 +1,26 @@
 import sys
 import os
-import time
 import logging
-from functools import lru_cache
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from langchain_core.documents import Document
 from backend.src.models.abstract import AbstractModel
 from backend.src.models.huggingface import HuggingfaceModel, ModelNames
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
-from typing import List, Dict, Optional
+from typing import List
 import uvicorn
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class Generator:
     def __init__(self, model: AbstractModel):
+        # 1. Initialize generator with model
         self.model = model
-        self.cache: Dict[str, str] = {}  # Simple response cache
+        self.cache = {}
 
     def _create_prompt(self, prompt: str, context: list[Document]) -> str:
-        """Create a formatted prompt with context"""
+        # 1. Create formatted prompt with or without context
         if len(context) == 0:
             return f"You are a helpful AI assistant. Answer the following question: {prompt}"
         else:
@@ -36,26 +34,21 @@ class Generator:
             )
 
     def __call__(self, prompt: str, context: list[Document]) -> str:
-        """Generate a response for the given prompt and context"""
-        # Create a cache key from the prompt and context
+        # 1. Generate response for given prompt and context
         context_str = "".join([doc.page_content for doc in context])
         cache_key = f"{prompt}_{hash(context_str)}"
         
-        # Check cache first
+        # 2. Check cache first
         if cache_key in self.cache:
-            logger.info("Using cached response")
             return self.cache[cache_key]
         
-        # Create the full prompt
-        start_time = time.time()
+        # 3. Create the full prompt
         full_prompt = self._create_prompt(prompt, context)
         
-        # Generate response
-        logger.info("Generating response...")
+        # 4. Generate response
         response = self.model(full_prompt)
-        logger.info(f"Response generated in {time.time() - start_time:.2f} seconds")
         
-        # Cache the response
+        # 5. Cache the response
         self.cache[cache_key] = response
         
         return response
@@ -73,7 +66,7 @@ is_initializing = False
 initialization_complete = False
 
 async def initialize_model_async(background_tasks: BackgroundTasks):
-    """Initialize the model in the background"""
+    # 1. Initialize model in background
     global model, generator, is_initializing, initialization_complete
     
     if is_initializing or initialization_complete:
@@ -83,15 +76,15 @@ async def initialize_model_async(background_tasks: BackgroundTasks):
     logger.info("Starting model initialization")
     
     try:
-        # Initialize model with CPU optimizations
+        # 2. Initialize model with CPU optimizations
         model = HuggingfaceModel(
             model_name=ModelNames.llama3_2_1B.value,
             max_tokens=1024,
             temperature=0.3,
-            use_4bit=True  # Enable 4-bit quantization for CPU efficiency
+            use_4bit=True
         )
         
-        # Initialize generator
+        # 3. Initialize generator
         generator = Generator(model)
         
         initialization_complete = True
@@ -103,13 +96,13 @@ async def initialize_model_async(background_tasks: BackgroundTasks):
 
 @app.on_event("startup")
 async def startup_event():
-    """Start background initialization when the app starts"""
+    # 1. Start background initialization when app starts
     background_tasks = BackgroundTasks()
     await initialize_model_async(background_tasks)
 
 @app.get("/status")
 async def get_status():
-    """Check the initialization status of the system"""
+    # 1. Check initialization status
     global initialization_complete, is_initializing
     
     if initialization_complete:
@@ -121,23 +114,21 @@ async def get_status():
 
 @app.post("/generate")
 async def generate_response(request: GenerateRequest, background_tasks: BackgroundTasks):
-    """Handle generation requests"""
+    # 1. Handle generation requests
     global generator, initialization_complete, is_initializing
     
     try:
-        # If not initialized, start initialization
+        # 2. Start initialization if needed
         if not initialization_complete:
             if not is_initializing:
                 await initialize_model_async(background_tasks)
             return {"response": "System is initializing. Please try again in a few minutes."}
         
-        # Convert context to Document objects
+        # 3. Convert context to Document objects
         context_docs = [Document(page_content=text) for text in request.context]
         
-        # Generate response
-        start_time = time.time()
+        # 4. Generate response
         response = generator(request.prompt, context_docs)
-        logger.info(f"Total request processed in {time.time() - start_time:.2f} seconds")
         
         return {"response": response}
     except Exception as e:
@@ -145,7 +136,6 @@ async def generate_response(request: GenerateRequest, background_tasks: Backgrou
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-    print("Starting generator server on port 8001...")
     uvicorn.run(app, host="0.0.0.0", port=8001)
 
 
