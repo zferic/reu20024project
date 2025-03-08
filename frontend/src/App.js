@@ -212,7 +212,7 @@ function ChatApp() {
           type="text"
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
-          placeholder="Type your message here..."
+          placeholder="Type your query here..."
           className="input-bar"
           disabled={isLoading}
         />
@@ -239,7 +239,7 @@ function AboutPage() {
       <h2>About PROTECT RAG</h2>
       <p>
         PROTECT RAG is a chatbot application designed to assist users with their inquiries surrounding Environmental
-        Health Research conducted by the PROTECT (Puero Rico Testsite for Exploring Contamination Threats). This website
+        Health Research conducted by the PROTECT (Puerto Rico Testsite for Exploring Contamination Threats). This website
         demonstrates the integration of distributed RAG modeling into a fullstack application and one of our many websites out
         for testing.
       </p>
