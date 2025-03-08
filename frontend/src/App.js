@@ -212,7 +212,7 @@ function ChatApp() {
           type="text"
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
-          placeholder="Type your message here..."
+          placeholder="Type your query here..."
           className="input-bar"
           disabled={isLoading}
         />
