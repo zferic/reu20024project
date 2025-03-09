@@ -41,10 +41,10 @@ worker_threads = max(2, cpu_count // 2)
 logger.info(f"Configuring thread pool with {worker_threads} workers")
 executor = ThreadPoolExecutor(max_workers=worker_threads)
 
-app = FastAPI()
+app = FastAPI(root_path="/api")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["https://prollm.ece.neu.edu/"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

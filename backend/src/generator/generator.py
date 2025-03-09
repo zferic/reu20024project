@@ -2,6 +2,7 @@ import sys
 import os
 import logging
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.append("/var/www/reu20024project")
 from langchain_core.documents import Document
 from backend.src.models.abstract import AbstractModel
 from backend.src.models.huggingface import HuggingfaceModel, ModelNames
