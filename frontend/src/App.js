@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
-import { FaThumbsUp, FaThumbsDown, FaPaperPlane, FaSun, FaMoon, FaBars } from 'react-icons/fa';
+import { FaPaperPlane, FaSun, FaMoon, FaBars, FaComment } from 'react-icons/fa';
 import { BrowserRouter as Router, Route, Routes, useNavigate, Link } from 'react-router-dom';
 import './App.css';
 import ReactMarkdown from 'react-markdown';
@@ -94,9 +94,13 @@ function Dashboard({ theme, toggleTheme }) {
 }
 
 function ChatApp() {
+  const API_BASE_URL = process.env.REACT_APP_API_URL || "https://prollm.ece.neu.edu";
   const [messages, setMessages] = useState([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  const [feedbackComment, setFeedbackComment] = useState('');
+  const [currentFeedbackIndex, setCurrentFeedbackIndex] = useState(null);
   const chatContainerRef = useRef(null);
 
   useEffect(() => {
@@ -114,9 +118,10 @@ function ChatApp() {
       setIsLoading(true);
 
       try {
-        const response = await axios.post('http://localhost:8000/query', {
-          question: inputValue,
-        });
+        const response = await axios.post(`${API_BASE_URL}/api/query`, {
+        question: inputValue,
+      });
+
 
         if (response.data && response.data.answer) {
           const botMessage = { text: response.data.answer, sender: 'bot', showFeedback: true };
@@ -137,24 +142,38 @@ function ChatApp() {
     }
   };
 
-  const handleFeedback = async (index, feedback) => {
+  const submitFeedback = async (index, comment) => {
     const message = messages[index];
     try {
-      await axios.post('http://localhost:8000/feedback', {
+      await axios.post(`${API_BASE_URL}/api/feedback`, {
         question: messages[index - 1]?.text || '',
         answer: message.text,
-        feedback: feedback,
+        feedback: 'detailed_feedback',
+        comment: comment
       });
 
       const updatedMessages = [...messages];
       updatedMessages[index] = {
         ...message,
         showFeedback: false,
-        feedbackGiven: feedback,
+        feedbackGiven: true,
       };
       setMessages(updatedMessages);
     } catch (error) {
       console.error('Error sending feedback:', error);
+    }
+  };
+
+  const handleCloseModal = () => {
+    setShowFeedbackModal(false);
+    setFeedbackComment('');
+    setCurrentFeedbackIndex(null);
+  };
+
+  const handleSubmitFeedback = async () => {
+    if (currentFeedbackIndex !== null) {
+      await submitFeedback(currentFeedbackIndex, feedbackComment);
+      handleCloseModal();
     }
   };
 
@@ -164,36 +183,32 @@ function ChatApp() {
       </header>
       <div className="chat-container" ref={chatContainerRef}>
       {messages.map((message, index) => (
-  <div key={index} className={`message ${message.sender}`}>
-    <div className="message-bubble">
-      {message.sender === 'bot' ? (
-        <ReactMarkdown className="message-text">
-          {message.text}
-        </ReactMarkdown>
-      ) : (
-        <div className="message-text">{message.text}</div>
-      )}
-      {message.sender === 'bot' && message.showFeedback && (
-        <div className="feedback-buttons">
-          <button
-            onClick={() => handleFeedback(index, 'thumbs_up')}
-            className="thumbs-up"
-            aria-label="Thumbs Up"
-          >
-            <FaThumbsUp />
-          </button>
-          <button
-            onClick={() => handleFeedback(index, 'thumbs_down')}
-            className="thumbs-down"
-            aria-label="Thumbs Down"
-          >
-            <FaThumbsDown />
-          </button>
+        <div key={index} className={`message ${message.sender}`}>
+          <div className="message-bubble">
+            {message.sender === 'bot' ? (
+              <ReactMarkdown className="message-text">
+                {message.text}
+              </ReactMarkdown>
+            ) : (
+              <div className="message-text">{message.text}</div>
+            )}
+            {message.sender === 'bot' && message.showFeedback && (
+              <div className="feedback-buttons">
+                <button
+                  onClick={() => {
+                    setCurrentFeedbackIndex(index);
+                    setShowFeedbackModal(true);
+                  }}
+                  className="feedback-comment"
+                  aria-label="Add Feedback"
+                >
+                  <FaComment /> Feedback
+                </button>
+              </div>
+            )}
+          </div>
         </div>
-      )}
-    </div>
-  </div>
-))}
+      ))}
 
         {isLoading && (
           <div className="message bot">
@@ -207,6 +222,25 @@ function ChatApp() {
           </div>
         )}
       </div>
+      
+      {showFeedbackModal && (
+        <div className="feedback-modal-overlay">
+          <div className="feedback-modal">
+            <h3>Provide Feedback</h3>
+            <textarea
+              className="feedback-textarea"
+              placeholder="What did you think of this response? Was it helpful? How could it be improved?"
+              value={feedbackComment}
+              onChange={(e) => setFeedbackComment(e.target.value)}
+            ></textarea>
+            <div className="feedback-modal-buttons">
+              <button onClick={handleCloseModal} className="cancel-button">Cancel</button>
+              <button onClick={handleSubmitFeedback} className="submit-button">Submit Feedback</button>
+            </div>
+          </div>
+        </div>
+      )}
+      
       <form onSubmit={handleSubmit} className="input-form">
         <input
           type="text"

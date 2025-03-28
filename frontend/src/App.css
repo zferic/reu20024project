@@ -228,21 +228,109 @@ body, html, #root {
 
 .feedback-buttons {
   display: flex;
-  gap: 10px;
+  justify-content: flex-end;
   margin-top: 10px;
 }
 
 .feedback-buttons button {
-  background: none;
-  border: none;
+  background-color: rgba(114, 191, 106, 0.1);
+  border: 1px solid #72bf6a;
+  border-radius: 15px;
   cursor: pointer;
-  font-size: 1.2rem;
-  color: #4fd276;
-  transition: color 0.3s ease;
+  font-size: 0.9rem;
+  color: #72bf6a;
+  padding: 5px 10px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  transition: all 0.3s ease;
 }
 
 .feedback-buttons button:hover {
-  color: #97fd8a;
+  background-color: rgba(114, 191, 106, 0.2);
+  color: #5da956;
+}
+
+.dark .feedback-buttons button {
+  background-color: rgba(114, 191, 106, 0.2);
+  color: #8ce683;
+}
+
+.feedback-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+.feedback-modal {
+  background-color: var(--message-bg);
+  color: var(--text-color);
+  padding: 20px;
+  border-radius: 10px;
+  width: 90%;
+  max-width: 500px;
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+}
+
+.feedback-modal h3 {
+  margin-top: 0;
+  margin-bottom: 15px;
+  font-size: 1.2rem;
+}
+
+.feedback-textarea {
+  width: 100%;
+  height: 150px;
+  padding: 10px;
+  margin-bottom: 15px;
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  background-color: var(--message-bg);
+  color: var(--text-color);
+  resize: none;
+  font-family: inherit;
+  font-size: 1rem;
+}
+
+.feedback-modal-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.feedback-modal-buttons button {
+  padding: 8px 16px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-weight: 500;
+  transition: background-color 0.3s ease;
+}
+
+.feedback-modal-buttons .cancel-button {
+  background-color: var(--background-color);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+}
+
+.feedback-modal-buttons .submit-button {
+  background-color: #72bf6a;
+  color: white;
+  border: none;
+}
+
+.feedback-modal-buttons .cancel-button:hover {
+  background-color: var(--dropdown-hover-bg);
+}
+
+.feedback-modal-buttons .submit-button:hover {
+  background-color: #5da956;
 }
 
 .input-form {
