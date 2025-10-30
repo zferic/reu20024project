@@ -1,203 +1,178 @@
 import os
-import pandas as pd
-import numpy as np
-from openai import OpenAI
-from transformers import AutoTokenizer, AutoModel
-from fastapi import FastAPI
-from pydantic import BaseModel
-from fastapi.middleware.cors import CORSMiddleware
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 import logging
+import time
+import json
+import openai
+import uvicorn
+from fastapi import FastAPI, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from concurrent.futures import ThreadPoolExecutor
 import requests
-from langchain_community.vectorstores import FAISS
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import DirectoryLoader, TextLoader, UnstructuredFileLoader
-from sentence_transformers import CrossEncoder
-from langchain_huggingface import HuggingFaceEmbeddings
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+from typing import List, Optional
+from src.retriever import RerankingRetriever, EmbeddingRetriever
+from src.serialization.serialization import serialize_context
+
+### **HARDCODED OPENAI API KEY - REMOVE AFTER DEMO**
+openai.api_key = "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"
+
+class QueryRequest(BaseModel):
+    question: str
+
+class FeedbackRequest(BaseModel):
+    question: str
+    answer: str
+    feedback: str
+    comment: Optional[str] = None
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Initialize paths
+papers_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "papers")
+vectors_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vectors")
+feedback_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "feedback")
+
+# Create feedback directory if it doesn't exist
+os.makedirs(feedback_path, exist_ok=True)
+
+# Global variables
+retriever = None
+is_initializing = False
+initialization_complete = False
+
+# Configure thread pool
+cpu_count = os.cpu_count() or 4
+worker_threads = max(2, cpu_count // 2)
+logger.info(f"Configuring thread pool with {worker_threads} workers")
+executor = ThreadPoolExecutor(max_workers=worker_threads)
+
+# **FIX CORS**
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["https://prollm.ece.neu.edu", "http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-executor = ThreadPoolExecutor()
-def deduplicate_chunks(chunks):
-    """
-    Deduplicate document chunks based on their content.
-    """
-    seen = set()
-    unique_chunks = []
-    for chunk in chunks:
-        if chunk.page_content not in seen:
-            seen.add(chunk.page_content)
-            unique_chunks.append(chunk)
-    return unique_chunks
-async def async_initialize_vector_store():
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(executor, initialize_vector_store)
 
-import re
-# Function to extract sections from a paper
-def extract_sections(text):
-    abstract_match = re.search(r'### Abstract ###(.*?)### Introduction ###', text, re.DOTALL)
-    introduction_match = re.search(r'### Introduction ###(.*?)(###|$)', text, re.DOTALL)
-    methods_match = re.search(r'### Methods ###(.*?)(###|$)', text, re.DOTALL)
-    results_match = re.search(r'### Results ###(.*?)(###|$)', text, re.DOTALL)
-    conclusion_match = re.search(r'### Conclusion ###(.*?)(###|$)', text, re.DOTALL)
-    
-    abstract = abstract_match.group(1).strip() if abstract_match else ""
-    introduction = introduction_match.group(1).strip() if introduction_match else ""
-    methods = methods_match.group(1).strip() if methods_match else ""
-    results = results_match.group(1).strip() if results_match else ""
-    conclusion = conclusion_match.group(1).strip() if conclusion_match else ""
-    
-    return abstract, introduction, methods, results, conclusion
-
-def load_documents():
-    # Define the directory containing the text files
-    text_files_dir = "/media/zman/extrahd/reu20024project/preprocessing/docs"
-
-    # Initialize lists to store the extracted sections
-    abstracts = []
-    introductions = []
-    methods = []
-    results = []
-    conclusions = []
-
-    # Read all text files and extract sections
-    for filename in os.listdir(text_files_dir):
-        if filename.endswith(".txt"):
-            with open(os.path.join(text_files_dir, filename), 'r', encoding='utf-8') as file:
-                text = file.read()
-                abstract, introduction, method, result, conclusion = extract_sections(text)
-                
-                if len(abstract.strip()) > 100:
-                    abstracts.append({'text': abstract.replace('\n', ' ').strip(), 'source': f'{filename}: Abstract'})
-                
-                if len(introduction.strip()) > 100:
-                    introductions.append({'text': introduction.replace('\n', ' ').strip(), 'source': f'{filename}: Introduction'})
-                
-                if len(method.strip()) > 100:
-                    methods.append({'text': method.replace('\n', ' ').strip(), 'source': f'{filename}: Methods'})
-                
-                if len(result.strip()) > 100:
-                    results.append({'text': result.replace('\n', ' ').strip(), 'source': f'{filename}: Results'})
-                
-                if len(conclusion.strip()) > 100:
-                    conclusions.append({'text': conclusion.replace('\n', ' ').strip(), 'source': f'{filename}: Conclusion'})
-
-    from langchain.docstore.document import Document as LangchainDocument
-
-    RAW_KNOWLEDGE_BASE = [
-        LangchainDocument(page_content=doc["text"], metadata={"source": doc["source"]})
-    for doc in abstracts + introductions + methods + results + conclusions
-            ]
-    docs_processed = []
-    for doc in RAW_KNOWLEDGE_BASE:
-        docs_processed += text_splitter.split_documents([doc])
-
-
-    return RAW_KNOWLEDGE_BASE
-
-
-def initialize_vector_store():
-    """
-    Initialize or load a FAISS vector store.
-    If the FAISS index exists at the specified path, it will be loaded.
-    Otherwise, the index will be created and saved to the path.
-
-    :return: The initialized FAISS vector store.
-    """
-    index_path = '/media/zman/extrahd/reu20024project/faiss_index_500'  # Hardcoded index path
-    
+async def initialize_retriever_async():
+    global retriever, is_initializing, initialization_complete
+    if is_initializing or initialization_complete:
+        return
+    is_initializing = True
+    logger.info("Starting retriever initialization")
     try:
-        # Check if the FAISS index already exists
-        if os.path.exists(index_path):
-            logger.info(f"Loading existing FAISS index from {index_path}...")
-            vectorstore = FAISS.load_local(index_path, 
-                                           HuggingFaceEmbeddings(model_name='sentence-transformers/all-distilroberta-v1'),
-                                            allow_dangerous_deserialization=True  # Explicitly allow deserialization
+        loop = asyncio.get_event_loop()
+        retriever = await loop.run_in_executor(
+            executor,
+            lambda: RerankingRetriever(
+                EmbeddingRetriever(
+                    docs_path=papers_path,
+                    vectors_path=vectors_path,
+                    recreate=False,
+                    batch_size=32
+                ),
+                first_pass_n=20,
+                batch_size=8
             )
-            logger.info("FAISS vector store loaded successfully.")
-        else:
-            logger.info("FAISS index not found. Creating a new index...")
-            loader = DirectoryLoader(r'/media/zman/extrahd/reu20024project/papers', glob="**/*.txt", loader_cls=UnstructuredFileLoader)
-            documents = loader.load()
-            text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-            splits = text_splitter.split_documents(documents)
-            unique_splits = deduplicate_chunks(splits)
-            logger.info("Creating FAISS index...")
-            embeddings = HuggingFaceEmbeddings(model_name='sentence-transformers/all-distilroberta-v1')
-            vectorstore = FAISS.from_documents(unique_splits, embeddings)
-            vectorstore.save_local(index_path)
-            logger.info(f"FAISS vector store created and saved to {index_path} successfully.")
-        
-        return vectorstore
+        )
+        initialization_complete = True
+        logger.info("Retriever initialized successfully")
     except Exception as e:
-        logger.error(f"Failed to initialize vector store: {e}")
-        raise Exception(f"Failed to initialize vector store: {e}")
-    
+        logger.error(f"Error initializing retriever: {e}")
+    finally:
+        is_initializing = False
 
-reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
-vectorstore = None
 @app.on_event("startup")
 async def startup_event():
-    global vectorstore
-    vectorstore = await async_initialize_vector_store()
+    asyncio.create_task(initialize_retriever_async())
 
-
-def retrieve_and_rerank(question, top_k_retrieve=20, top_k_rerank=4):
+async def query_openai(question: str):
+    global retriever, initialization_complete
     try:
-        global vectorstore
-        initial_results = vectorstore.similarity_search_with_score(question, k=top_k_retrieve)
-        pairs = [(question, doc.page_content) for doc, _ in initial_results]
-        scores = reranker.predict(pairs)
-        scored_results = list(zip(initial_results, scores))
-        reranked_results = sorted(scored_results, key=lambda x: x[1], reverse=True)[:top_k_rerank]
-        return [(doc.page_content, score) for (doc, _), score in reranked_results]
+        if not initialization_complete:
+            return "System is still initializing. Please try again in a few minutes."
+
+        # Retrieve context from retriever
+        context = retriever(question, n=10)
+        serialized = serialize_context(context)
+        logger.info(f"Context retrieved: {serialized}")
+
+        # Format the prompt based on context
+        if not serialized:
+            system_message = (
+                 "You are a helpful AI assistant who answers questions based only on provided context. "
+                "The context includes titles, introductions, and results of research studies. "
+                "Include the titles of the papers and summaries of the studies in your responses."
+                "Do not use papers outside of PROTECT"
+            )
+            user_message = f"Answer the following question: {question}"
+        else:
+            system_message = (
+                "You are a helpful AI assistant who answers questions based on provided context. "
+                "The context includes titles, introductions, and results of research studies. "
+                "When listing papers, always try to include at least 3 relevant papers if available. "
+                "Include the titles of the papers and provide detailed summaries of the studies in your responses. "
+                "If fewer than 3 papers are available, explain that these are the only relevant papers found in the context. "
+            )
+            user_message = f"Here is the context:\n{serialized}\n\nAnswer the following question: {question}"
+
+        # Call OpenAI
+        client = openai.OpenAI(api_key=openai.api_key)
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": user_message}
+            ],
+            temperature = 0.2
+        )
+
+        return response.choices[0].message.content
     except Exception as e:
-        print(f"Error in retrieve_and_rerank: {e}")
-        return []
+        logger.error(f"Error in OpenAI query: {e}")
+        return f"Error: {str(e)}"
 
-
-def query(question):
-    retrieved_contexts = retrieve_and_rerank(question)
-    contexts = "\n\n".join([f"Doc {i+1}: {text.strip()}" for i, (text, _) in enumerate(retrieved_contexts)])
-
-    prompt = (
-        "You are a helpful AI assistant who answers questions based on the provided context. "
-        "Do not change the question or ask your own questions."
-        "When applicable, base your answer entirely on the context provided."
-        "Include the titles of the papers where applicable.\n\n"
-        f"Context:\n{contexts}\n\nQuestion: {question}"
-    )
-
-
-    print("Context:", contexts)
-    print("Prompt:", prompt)
-    try:
-        response = requests.post("http://localhost:8001/generate", json={"prompt": prompt, "max_tokens": 1024})
-        response.raise_for_status()
-        response_data = response.json()
-        return response_data.get("response", "No response received.")
-    except Exception as e:
-        print(f"Error: {e}")
-        return "Error: Unable to process the query."
-async def query_async(question):
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(executor, query, question)
-class QueryRequest(BaseModel):
-    question: str
 @app.post("/query")
-async def get_query_response(request: QueryRequest):
-    answer = await query_async(request.question)
-    return {"answer": answer}
+async def get_query_response(request: QueryRequest, background_tasks: BackgroundTasks):
+    global initialization_complete
+    try:
+        if not initialization_complete and not is_initializing:
+            background_tasks.add_task(initialize_retriever_async)
+            return {"answer": "System is initializing. Please try again shortly."}
+
+        answer = await query_openai(request.question)
+        return {"answer": answer}
+    except Exception as e:
+        logger.error(f"Error processing query: {e}")
+        return {"error": str(e)}
+
+@app.post("/feedback")
+async def store_feedback(request: FeedbackRequest):
+    try:
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        feedback_data = {
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "question": request.question,
+            "answer": request.answer,
+            "feedback": request.feedback,
+            "comment": request.comment
+        }
+        
+        feedback_file = os.path.join(feedback_path, f"feedback_{timestamp}.json")
+        with open(feedback_file, 'w') as f:
+            json.dump(feedback_data, f, indent=2)
+        
+        logger.info(f"Feedback stored successfully: {feedback_file}")
+        return {"status": "success", "message": "Feedback stored successfully"}
+    except Exception as e:
+        logger.error(f"Error storing feedback: {e}")
+        return {"status": "error", "message": str(e)}
+
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000, ssl_certfile="./cert.pem", ssl_keyfile="./key.pem")
