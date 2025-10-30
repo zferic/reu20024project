@@ -77,3 +77,14 @@ A research paper question-answering system using LLMs and semantic search.
 - Frontend development server runs on `http://localhost:3000`
 - VLLM server runs on `http://localhost:8001`
 
+## VLLM development
+python -m vllm.entrypoints.api_server --model <model-name> --port 8001
+
+# APACHE CONFIG/ CMDS
+/etc/apache2/sites-available/prollm.conf # apache config file
+sudo a2enmod proxy proxy_http rewrite headers
+sudo systemctl reload apache2
+sudo systemctl restart apache2
+
+ sudo systemctl restart  reu20024-backend.service  #backend refresh
+ sudo systemctl restart  reu20024-generator.service #generator refresh
