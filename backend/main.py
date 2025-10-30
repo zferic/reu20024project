@@ -25,6 +25,7 @@ class QueryRequest(BaseModel):
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logger.info("GENERATOR_URL: " + str(os.getenv("GENERATOR_URL")))
 
 # Initialize paths
 papers_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "papers")
@@ -41,10 +42,10 @@ worker_threads = max(2, cpu_count // 2)
 logger.info(f"Configuring thread pool with {worker_threads} workers")
 executor = ThreadPoolExecutor(max_workers=worker_threads)
 
-app = FastAPI(root_path="/api")
+app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://prollm.ece.neu.edu/"],
+    allow_origins=["https://prollm.ece.neu.edu"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -90,43 +91,42 @@ async def startup_event():
     asyncio.create_task(initialize_retriever_async())
 
 async def query(question: str):
-    # 1. Process a query using retriever and generator
     global retriever, initialization_complete
-    
     try:
-        # 2. Check if retriever is initialized
         if not initialization_complete:
             logger.info("Retriever not yet initialized, waiting...")
             start_time = time.time()
-            timeout = 300  # 5 minutes timeout
-            
+            timeout = 300  
             while not initialization_complete and time.time() - start_time < timeout:
                 await asyncio.sleep(1)
-            
             if not initialization_complete:
                 return "System is still initializing. Please try again in a few minutes."
         
-        # 3. Retrieve context
         context = retriever(question, n=5)
-        
-        # 4. Serialize context
         serialized = serialize_context(context)
+        logger.info(f"Sending to generator: prompt={question}, context={serialized}")
         
-        # 5. Make request to generator API
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(
             executor,
             lambda: requests.post(
-                "http://localhost:8001/generate",
+                os.getenv("GENERATOR_URL", "http://127.0.0.1:8001/generate"),
                 json={
                     "prompt": question,
                     "context": serialized
                 }
             )
         )
-        
-        # 6. Return response
-        response_data = response.json()
+        try:
+            response_data = response.json()
+            logger.info(f"Generator response raw: {response.text}")
+            logger.info(f"Generator response JSON: {response_data}")
+
+        except Exception as parse_err:
+            logger.error(f"Failed to parse JSON response: {parse_err}")
+            return "No response received."
+
+        logger.info(f"Generator response: {response_data}")
         return response_data.get("response", "No response received.")
     except Exception as e:
         logger.error(f"Error in query: {e}")
