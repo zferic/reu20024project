@@ -6,6 +6,9 @@ A research paper question-answering system using LLMs and semantic search.
 
 This project uses a Retrieval-Augmented Generation (RAG) framework to answer questions grounded in a corpus of research papers. User queries are embedded and matched against a FAISS vector index to retrieve the most relevant document chunks. Those chunks are passed as context to a large language model, which generates accurate, citation-aware responses. This approach reduces hallucination by anchoring generation to retrieved evidence rather than relying solely on model memory.
 
+## Frontend
+The frontend is a React web app that provides a chat interface for interacting with the RAG system. It features a splash screen, a dashboard with chat, previous chats, and about pages, and supports light/dark theme toggling. Bot responses are rendered as Markdown and streamed progressively to simulate a typing effect. Users can also submit thumbs up/down feedback on each response, which is logged to the backend.
+
 ## Project Structure
 ```
 .
