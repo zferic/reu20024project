@@ -1,5 +1,7 @@
 # Research LLM Project
 
+**Live Demo:** [https://prollm.ece.neu.edu/dashboard/chat](https://prollm.ece.neu.edu/dashboard/chat)
+
 A research paper question-answering system using LLMs and semantic search.
 
 ## Project Structure
