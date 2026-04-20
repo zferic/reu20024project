@@ -4,6 +4,8 @@
 
 A research paper question-answering system using LLMs and semantic search.
 
+This project uses a Retrieval-Augmented Generation (RAG) framework to answer questions grounded in a corpus of research papers. User queries are embedded and matched against a FAISS vector index to retrieve the most relevant document chunks. Those chunks are passed as context to a large language model, which generates accurate, citation-aware responses. This approach reduces hallucination by anchoring generation to retrieved evidence rather than relying solely on model memory.
+
 ## Project Structure
 ```
 .
