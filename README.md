@@ -6,6 +6,8 @@ A research paper question-answering system using LLMs and semantic search.
 
 This project uses a Retrieval-Augmented Generation (RAG) framework to answer questions grounded in a corpus of research papers. User queries are embedded and matched against a FAISS vector index to retrieve the most relevant document chunks. Those chunks are passed as context to a large language model, which generates accurate, citation-aware responses. This approach reduces hallucination by anchoring generation to retrieved evidence rather than relying solely on model memory.
 
+Models are loaded via the HuggingFace `transformers` library, with support for Meta's Llama 3.2 (1B and 3B Instruct variants). The system supports multiple inference backends: native HuggingFace inference with optional 4-bit quantization via `bitsandbytes`, high-throughput serving through `vLLM`, and CPU-friendly inference via `llama.cpp`. This flexibility allows the system to run efficiently across both GPU servers and CPU-only environments.
+
 ## Frontend
 The frontend is a React web app that provides a chat interface for interacting with the RAG system. It features a splash screen, a dashboard with chat, previous chats, and about pages, and supports light/dark theme toggling. Bot responses are rendered as Markdown and streamed progressively to simulate a typing effect. Users can also submit thumbs up/down feedback on each response, which is logged to the backend.
 
