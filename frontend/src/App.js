@@ -94,7 +94,7 @@ function Dashboard({ theme, toggleTheme }) {
 }
 
 function ChatApp() {
-  const API_BASE_URL = process.env.REACT_APP_API_URL || "https://prollm.ece.neu.edu";
+  const API_BASE_URL = process.env.REACT_APP_API_URL || "http://localhost:8004";
   const [messages, setMessages] = useState([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);

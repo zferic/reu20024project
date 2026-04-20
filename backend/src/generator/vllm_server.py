@@ -9,9 +9,8 @@ import asyncio
 app = FastAPI()
 
 #llm = LLM(model="meta-llama/Llama-3.2-3B-Instruct",  max_model_len=7000)
-llm = LLM(model="meta-llama/Llama-3.2-3B-Instruct",   
+llm = LLM(model="meta-llama/Llama-3.2-1B-Instruct",   
 #model="meta-llama/Llama-3.1-8B-Instruct",
-
           max_model_len=4048,
           max_num_seqs=2) # Adjust as required)
 

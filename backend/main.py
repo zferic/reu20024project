@@ -45,7 +45,7 @@ executor = ThreadPoolExecutor(max_workers=worker_threads)
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://prollm.ece.neu.edu"],
+    allow_origins=["http://localhost:8000", "http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -102,28 +102,58 @@ async def query(question: str):
             if not initialization_complete:
                 return "System is still initializing. Please try again in a few minutes."
         
-        context = retriever(question, n=5)
+        context = retriever(question, n=3)
         serialized = serialize_context(context)
+
+        serialized = [doc.page_content for doc in context]
+
+        print("Serialized context:")
+        print(serialized)
+
         logger.info(f"Sending to generator: prompt={question}, context={serialized}")
         
         loop = asyncio.get_event_loop()
+
+        gen_url = os.getenv("GENERATOR_URL", "http://127.0.0.1:8007/generate")
+        logger.info(f"GENERATOR_URL resolved to: {gen_url}")
         response = await loop.run_in_executor(
             executor,
             lambda: requests.post(
-                os.getenv("GENERATOR_URL", "http://127.0.0.1:8001/generate"),
-                json={
-                    "prompt": question,
-                    "context": serialized
-                }
+                "http://127.0.0.1:8007/generate",  # pick the real port
+                json={"prompt": question, "context": serialized},  # ok to test with empty context
+                headers={"accept": "application/json"},
+                timeout=1000
             )
         )
+
+        if response.status_code != 200:
+            logger.error(
+                f"Generator HTTP {response.status_code} | "
+                f"CT={response.headers.get('content-type')} | "
+                f"Body={response.text[:500]}"
+            )
+            return f"Generator error ({response.status_code}): {response.text[:200]}"
+
         try:
             response_data = response.json()
+        except Exception:
+            logger.error(
+                f"Non-JSON from generator | "
+                f"CT={response.headers.get('content-type')} | "
+                f"Body={response.text[:500]}"
+            )
+            return "Generator returned a non-JSON response."
+
+        try:
+            response_data = response.json()
+            print("Printing response data:")
+            print(response_data)
             logger.info(f"Generator response raw: {response.text}")
             logger.info(f"Generator response JSON: {response_data}")
 
         except Exception as parse_err:
             logger.error(f"Failed to parse JSON response: {parse_err}")
+            print(f"Failed to parse JSON response: {parse_err}")
             return "No response received."
 
         logger.info(f"Generator response: {response_data}")
@@ -144,7 +174,7 @@ async def get_status():
     else:
         return {"status": "not_started", "message": "System initialization has not started yet"}
 
-@app.post("/query")
+@app.post("/api/query")
 async def get_query_response(request: QueryRequest, background_tasks: BackgroundTasks):
     # 1. Handle query requests
     global initialization_complete
@@ -163,4 +193,4 @@ async def get_query_response(request: QueryRequest, background_tasks: Background
         return {"error": f"Unable to process the query: {str(e)}"}
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000, ssl_certfile="./cert.pem", ssl_keyfile="./key.pem")
+    uvicorn.run(app, host="0.0.0.0", port=8004)#, ssl_certfile="./cert.pem", ssl_keyfile="./key.pem")

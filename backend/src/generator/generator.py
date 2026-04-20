@@ -2,7 +2,7 @@ import sys
 import os
 import logging
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-sys.path.append("/var/www/reu20024project")
+sys.path.append("/home/zlatan7369/reu20024project")
 from langchain_core.documents import Document
 from backend.src.models.abstract import AbstractModel
 from backend.src.models.huggingface import HuggingfaceModel, ModelNames
@@ -10,15 +10,22 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from typing import List
 import uvicorn
+from backend.src.models.huggingface import LlamaCppModel
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+
 
 class Generator:
     def __init__(self, model: AbstractModel):
         # 1. Initialize generator with model
         self.model = model
         self.cache = {}
+
+    def wrap_llama2_chat(self, prompt):
+        return f"<s>[INST] <<SYS>>\nYou are a helpful AI assistant.\n<</SYS>>\n\n{prompt} [/INST]"
 
     def _create_prompt(self, prompt: str, context: list[Document]) -> str:
         # 1. Create formatted prompt with or without context
@@ -30,6 +37,7 @@ class Generator:
                 "You are a helpful AI assistant who answers questions based on provided context. "
                 "The context includes titles, introductions, and results of research studies. "
                 "Include the titles of the papers and summaries of the studies in your responses. "
+                #f"Here is the context: {context_formatted}"
                 f"Here is the context: {context_formatted}"
                 f"Answer the following question: {prompt}"
             )
@@ -44,7 +52,10 @@ class Generator:
             return self.cache[cache_key]
         
         # 3. Create the full prompt
-        full_prompt = self._create_prompt(prompt, context)
+        full_prompt = self.wrap_llama2_chat(self._create_prompt(prompt, context))
+        #full_prompt = self._create_prompt(prompt, context)
+
+        logger.info(f"Full Prompt: {full_prompt}")
         
         # 4. Generate response
         response = self.model(full_prompt)
@@ -69,6 +80,11 @@ initialization_complete = False
 async def initialize_model_async(background_tasks: BackgroundTasks):
     # 1. Initialize model in background
     global model, generator, is_initializing, initialization_complete
+
+    
+    print("Available models:")
+    for m in ModelNames:
+        print("-", m.name, "→", m.value)
     
     if is_initializing or initialization_complete:
         return
@@ -78,13 +94,20 @@ async def initialize_model_async(background_tasks: BackgroundTasks):
     
     try:
         # 2. Initialize model with CPU optimizations
+        '''
         model = HuggingfaceModel(
-            model_name=ModelNames.llama3_2_1B.value,
-            max_tokens=1024,
+            model_name=ModelNames.llama3_2_3B.value,
+            max_tokens=256,
             temperature=0.3,
             use_4bit=True
         )
-        
+        '''
+        model = LlamaCppModel(
+           model_path = "/home/zlatan7369/reu20024project/backend/src/generator/models/llama-2-7b-chat.Q4_K_M.gguf",
+            max_tokens=256,
+            temperature=0.3,
+            n_threads=6
+        )
         # 3. Initialize generator
         generator = Generator(model)
         
@@ -137,6 +160,6 @@ async def generate_response(request: GenerateRequest, background_tasks: Backgrou
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    uvicorn.run(app, host="0.0.0.0", port=8007)
 
 

@@ -6,9 +6,11 @@ from backend.utils.device import get_device
 from enum import Enum
 from .abstract import AbstractModel
 from utils.messages import MessageHistory
+from llama_cpp import Llama
 
 class ModelNames(Enum):
     llama3_2_1B = "meta-llama/Llama-3.2-1B-Instruct"
+    llama3_2_3B = "meta-llama/Llama-3.2-3B-Instruct"
 
 class HuggingfaceModel(AbstractModel):
     def __init__(self, model_name: str, max_tokens: int, temperature: float, use_4bit: bool = True):
@@ -129,6 +131,30 @@ class HuggingfaceModel(AbstractModel):
 
 
 
+# -----------------------------
+# NEW: llama.cpp model backend
+# -----------------------------
+class LlamaCppModel(AbstractModel):
+    def __init__(self, model_path, max_tokens=512, temperature=0.3, n_threads=6):
+        super().__init__(max_tokens, temperature)
+        from llama_cpp import Llama
+        self.model = Llama(
+            model_path=model_path,
+            n_ctx=4096,
+            n_threads=n_threads,
+            use_mlock=True,
+            verbose=False
+        )
 
+    def __call__(self, prompt: str) -> str:
+        output = self.model(
+            prompt,
+            max_tokens=self.max_tokens,
+            temperature=self.temperature,
+            stop=["</s>"]
+        )
+        return output["choices"][0]["text"]
 
-                        
+    # 🧩 Add this to satisfy the abstract interface
+    def next_probabilities(self, input, top_k: int = 5) -> dict[str, float]:
+        return {}
