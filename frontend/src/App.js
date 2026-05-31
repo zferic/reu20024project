@@ -94,7 +94,7 @@ function Dashboard({ theme, toggleTheme }) {
 }
 
 function ChatApp() {
-  const API_BASE_URL = process.env.REACT_APP_API_URL || "http://localhost:8004";
+  const API_BASE_URL = process.env.REACT_APP_API_URL || "https://prollm.ece.neu.edu";
   const [messages, setMessages] = useState([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -109,6 +109,62 @@ function ChatApp() {
     }
   }, [messages, isLoading]);
 
+  const handleSubmit = async (e) => {
+  e.preventDefault();
+  if (!inputValue.trim()) return;
+
+  const userText = inputValue;
+  setInputValue("");
+
+  // Add user message
+  setMessages((prev) => [...prev, { text: userText, sender: "user" }]);
+
+  // Prepare bot message placeholder
+  const botIndex = messages.length + 1;
+  setMessages((prev) => [...prev, { text: "", sender: "bot", showFeedback: false }]);
+
+  setIsLoading(true);
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/query_stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: userText })
+    });
+
+    if (!response.body) throw new Error("ReadableStream not supported.");
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+
+    let botText = "";
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      const chunk = decoder.decode(value, { stream: true });
+      botText += chunk;
+
+      // Update the bot message live
+      setMessages((prev) => {
+        const updated = [...prev];
+        updated[botIndex] = { text: botText, sender: "bot", showFeedback: true };
+        return updated;
+      });
+    }
+
+  } catch (err) {
+    console.error("Streaming error:", err);
+    setMessages((prev) => [
+      ...prev,
+      { text: "Error receiving streamed response.", sender: "bot" }
+    ]);
+  }
+
+  setIsLoading(false);
+};
+/*
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (inputValue.trim() !== '') {
@@ -141,7 +197,7 @@ function ChatApp() {
       }
     }
   };
-
+*/
   const submitFeedback = async (index, comment) => {
     const message = messages[index];
     try {

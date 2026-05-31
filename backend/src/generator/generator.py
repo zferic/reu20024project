@@ -2,20 +2,20 @@ import sys
 import os
 import logging
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-sys.path.append("/home/zlatan7369/reu20024project")
+sys.path.append("/var/www/reu20024project")
 from langchain_core.documents import Document
 from backend.src.models.abstract import AbstractModel
 from backend.src.models.huggingface import HuggingfaceModel, ModelNames
 from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List
 import uvicorn
 from backend.src.models.huggingface import LlamaCppModel
+from backend.src.models.hf_inference_provider import HFInferenceProviderModel
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-
 
 
 class Generator:
@@ -34,13 +34,13 @@ class Generator:
         else:
             context_formatted = "\n\n".join([c.page_content for c in context])
             return (
-                "You are a helpful AI assistant who answers questions based on provided context. "
-                "The context includes titles, introductions, and results of research studies. "
-                "Include the titles of the papers and summaries of the studies in your responses. "
-                #f"Here is the context: {context_formatted}"
-                f"Here is the context: {context_formatted}"
-                f"Answer the following question: {prompt}"
-            )
+                "You are a helpful AI assistant who answers using the provided context.\n"
+                "Rules:\n"
+          
+                f"Context:\n{context_formatted}\n\n"
+                f"Question: {prompt}\n"
+
+                )
 
     def __call__(self, prompt: str, context: list[Document]) -> str:
         # 1. Generate response for given prompt and context
@@ -71,6 +71,11 @@ class GenerateRequest(BaseModel):
     prompt: str
     context: List[str]
 
+APP_VERSION = "hf-provider-test-2026-01-22"
+MODEL_BACKEND = "hf_provider"
+#MODEL_BACKEND = os.getenv("MODEL_BACKEND", "llamacpp")  # "llamacpp" or "hf_provider"
+HF_PROVIDER_MODEL = os.getenv("HF_PROVIDER_MODEL", "openai/gpt-oss-120b")
+
 # Global variables
 model = None
 generator = None
@@ -81,42 +86,50 @@ async def initialize_model_async(background_tasks: BackgroundTasks):
     # 1. Initialize model in background
     global model, generator, is_initializing, initialization_complete
 
-    
     print("Available models:")
     for m in ModelNames:
         print("-", m.name, "→", m.value)
-    
+
     if is_initializing or initialization_complete:
         return
-    
+
     is_initializing = True
     logger.info("Starting model initialization")
-    
+
     try:
-        # 2. Initialize model with CPU optimizations
-        '''
-        model = HuggingfaceModel(
-            model_name=ModelNames.llama3_2_3B.value,
-            max_tokens=256,
-            temperature=0.3,
-            use_4bit=True
-        )
-        '''
-        model = LlamaCppModel(
-           model_path = "/home/zlatan7369/reu20024project/backend/src/generator/models/llama-2-7b-chat.Q4_K_M.gguf",
-            max_tokens=256,
-            temperature=0.3,
-            n_threads=6
-        )
-        # 3. Initialize generator
+        if MODEL_BACKEND == "hf_provider":
+            '''
+            model = HuggingfaceModel(
+                model_name=ModelNames.llama3_2_3B.value,
+                max_tokens=256,
+                temperature=0.3,
+                use_4bit=True
+            )
+            '''
+            model = HFInferenceProviderModel(
+                model_name=HF_PROVIDER_MODEL,
+                max_tokens=10000,
+                temperature=0.3,
+            )
+            logger.info(f"Using HF provider model: {HF_PROVIDER_MODEL}")
+        else:
+            model = LlamaCppModel(
+                model_path="/home/zlatan7369/reu20024project/backend/src/generator/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+                max_tokens=512,
+                temperature=0.3,
+                n_threads=6,
+            )
+            logger.info("Using local LlamaCpp model")
+
         generator = Generator(model)
-        
         initialization_complete = True
         logger.info("Model initialization completed successfully")
+
     except Exception as e:
         logger.error(f"Error initializing model: {e}")
     finally:
         is_initializing = False
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -126,15 +139,47 @@ async def startup_event():
 
 @app.get("/status")
 async def get_status():
-    # 1. Check initialization status
     global initialization_complete, is_initializing
-    
+
     if initialization_complete:
-        return {"status": "ready", "message": "Generator is ready to process requests"}
+        return {"status": "ready", "message": "Generator is ready to process requests", "version": APP_VERSION}
     elif is_initializing:
-        return {"status": "initializing", "message": "Generator is initializing. Please wait."}
+        return {"status": "initializing", "message": "Generator is initializing. Please wait.", "version": APP_VERSION}
     else:
-        return {"status": "not_started", "message": "Generator initialization has not started yet"}
+        return {"status": "not_started", "message": "Generator initialization has not started yet", "version": APP_VERSION}
+
+
+@app.post("/generate_stream")
+async def generate_stream(request: GenerateRequest):
+    global generator, initialization_complete
+
+    if not initialization_complete:
+        return StreamingResponse(iter(["System initializing..."]), media_type="text/plain")
+
+    context_docs = [Document(page_content=text) for text in request.context]
+    prompt = generator._create_prompt(request.prompt, context_docs)
+    full_prompt = generator.wrap_llama2_chat(prompt)
+
+    def token_stream():
+        # HF provider path (our wrapper exposes .stream())
+        if hasattr(generator.model, "stream"):
+            for chunk in generator.model.stream(full_prompt):
+                yield chunk
+            return
+
+        # llama.cpp fallback (your existing logic)
+        for event in generator.model.model(
+            prompt=full_prompt,
+            max_tokens=generator.model.max_tokens,
+            temperature=generator.model.temperature,
+            stream=True,
+        ):
+            if "choices" in event:
+                text = event["choices"][0].get("text", "")
+                if text:
+                    yield text
+
+    return StreamingResponse(token_stream(), media_type="text/plain")
 
 @app.post("/generate")
 async def generate_response(request: GenerateRequest, background_tasks: BackgroundTasks):
@@ -160,6 +205,6 @@ async def generate_response(request: GenerateRequest, background_tasks: Backgrou
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8007)
+    uvicorn.run(app, host="0.0.0.0", port=8001)
 
 

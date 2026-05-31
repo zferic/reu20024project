@@ -91,3 +91,17 @@ log/
 # OS
 .DS_Store
 Thumbs.db
+
+# Virtual environments
+venv310/
+vllm-env/
+vllm-env-py310/
+
+# Large data/vector files
+backend/vectors_partial_*
+
+# vllm library source
+backend/src/generator/vllm/
+
+# Model weights
+backend/src/generator/models/

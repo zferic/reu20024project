@@ -13,6 +13,97 @@ from tqdm import tqdm
 from .abstract import AbstractRetriever
 from backend.utils.device import get_device
 
+import logging
+logger = logging.getLogger(__name__)
+
+
+SECTION_REGEX = re.compile(r"(###\s+[A-Za-z ].+?\s+###)")
+
+DROP_SECTIONS = {
+    "References",
+    "Funding",
+    "Conflicts of Interest",
+    "Publisher's Disclaimer",
+    "Supplementary Materials",
+    "Acknowledgements"
+}
+
+def split_by_sections(text: str):
+    """
+    Returns list of (section_name, section_text)
+    """
+    parts = SECTION_REGEX.split(text)
+    sections = []
+
+    # If no headers found, treat entire doc as one section
+    if len(parts) == 1:
+        return [("Body", text)]
+
+    for i in range(1, len(parts), 2):
+        header = parts[i]
+        content = parts[i + 1] if i + 1 < len(parts) else ""
+
+        section_name = header.replace("#", "").strip()
+        sections.append((section_name, content.strip()))
+
+    return sections
+
+def get_splitter_for_section(section: str):
+    section = section.lower()
+
+    separators = ["\n\n", "\n", ". ", " ", ""]
+
+    # 🔹 DATA DICTIONARY: do NOT split
+    if "data_dictionary" in section or "dictionary" in section:
+        logger.info(f"Splitting dictionary")
+        return RecursiveCharacterTextSplitter(
+            chunk_size=10_000,   # large enough to keep one block
+            chunk_overlap=0,
+            separators=["\n\n"],  # split only if truly massive
+        )
+
+
+    if "abstract" in section:
+        return RecursiveCharacterTextSplitter(
+            chunk_size=5000,
+            chunk_overlap=50,
+            separators=separators,
+        )
+
+    if "methods" in section:
+        return RecursiveCharacterTextSplitter(
+            chunk_size=5000,
+            chunk_overlap=100,
+            separators=separators,
+        )
+
+    if "results" in section:
+        return RecursiveCharacterTextSplitter(
+            chunk_size=5000,
+            chunk_overlap=75,
+            separators=separators,
+        )
+
+    if "discussion" in section:
+        return RecursiveCharacterTextSplitter(
+            chunk_size=5000,
+            chunk_overlap=75,
+            separators=separators,
+        )
+
+    if "conclusion" in section:
+        return RecursiveCharacterTextSplitter(
+            chunk_size=5000,
+            chunk_overlap=50,
+            separators=separators,
+        )
+
+    return RecursiveCharacterTextSplitter(
+        chunk_size=5000,
+        chunk_overlap=50,
+        separators=separators,
+    )
+
 class EmbeddingRetriever(AbstractRetriever):
     def __init__(self, docs_path: str = "papers", vectors_path: str = "vectorstore", recreate: bool = False, batch_size: int = 32):
         # 1. Initialize paths and settings
@@ -21,6 +112,10 @@ class EmbeddingRetriever(AbstractRetriever):
         self.device = get_device()
         self.batch_size = batch_size
         self.cache = {}
+
+   
+        print("docs_path =", docs_path, flush=True)
+
         
         # 2. Create vector store if needed or load existing one
         if recreate or not os.path.exists(vectors_path):
@@ -34,6 +129,21 @@ class EmbeddingRetriever(AbstractRetriever):
             print(f"Loading vector store from {vectors_path}")
             with open(vectors_path, "rb") as f:
                 self.vector_store: FAISS = pickle.load(f)
+            
+            # 4. Fix compatibility issues with older transformers versions
+            if hasattr(self.vector_store, 'embeddings'):
+                embeddings = self.vector_store.embeddings
+                if hasattr(embeddings, 'client') and hasattr(embeddings.client, '_modules'):
+                    model = embeddings.client
+                    if hasattr(model, 'config'):
+                        config = model.config
+                        # Add missing attributes for newer transformers versions
+                        if not hasattr(config, '_output_attentions'):
+                            config._output_attentions = False
+                        if not hasattr(config, '_output_hidden_states'):
+                            config._output_hidden_states = False
+                        if not hasattr(config, '_use_cache'):
+                            config._use_cache = True
         except Exception as e:
             raise Exception(f"Failed to load vector store: {e}")
 
@@ -74,26 +184,79 @@ class EmbeddingRetriever(AbstractRetriever):
         # 1. Create vector store from documents
         try:
             print(f"Initializing vector store from {self.docs_path}")
-            
+            logger.info(f"Initializing vector store from {self.docs_path}")
+            logger.info(f"What's going on?")
             # 2. Load documents
             loader = DirectoryLoader(self.docs_path, glob="**/*.txt", loader_cls=UnstructuredFileLoader)
             documents = loader.load()
-            
+            #documents = documents[:10]
             # 3. Split documents into chunks
-            text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-            splits = text_splitter.split_documents(documents)
-            unique_splits = self._deduplicate_chunks(splits)
+            #text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+            #splits = text_splitter.split_documents(documents)
+            
+            logger.info(f"Length of documents", len(documents))
+            logger.info(f"Past documents")
+            section_documents = []
+
+            for doc in documents:
+                raw_text = doc.page_content
+                source = doc.metadata.get("source")
+                logger.info(f"before split")
+                sections = split_by_sections(raw_text)
+                logger.info(f"after split")
+                for section_name, section_text in sections:
+                    if not section_text.strip():
+                        continue
+
+                    # Drop junk sections
+                    if section_name in DROP_SECTIONS:
+                        continue
+                    logger.info(f"before split for section")
+                    splitter = get_splitter_for_section(section_name)
+                    logger.info(f"after split for section")
+                    logger.info(section_text)
+                    chunks = splitter.split_text(section_text)
+                    logger.info(f"after split_text")
+                    
+                    for chunk in chunks:
+                        #logger.info(f"page_content", f"Title: {source}\nSection: {section_name}\n\n{chunk}")
+                        section_documents.append(
+                            Document(
+                                page_content=f"Title: {source}\nSection: {section_name}\n\n{chunk}",
+                                metadata={
+                                    "source": source,
+                                    "section": section_name
+                                }
+                            )
+                        )
+            
+            
+            
+            unique_splits = self._deduplicate_chunks(section_documents)
+
             print(f"Created {len(unique_splits)} unique chunks")
             
-            # 4. Initialize embeddings
+            # 4. Initialize embeddings with proper tokenizer configuration
             embeddings = HuggingFaceEmbeddings(
                 model_name='sentence-transformers/all-distilroberta-v1', 
-                model_kwargs={'device': self.device}
+                model_kwargs={'device': self.device},
+                encode_kwargs={'normalize_embeddings': True}
             )
+            
+            # Ensure tokenizer has pad_token set
+            if hasattr(embeddings, 'client') and hasattr(embeddings.client, 'tokenizer'):
+                if embeddings.client.tokenizer.pad_token is None:
+                    embeddings.client.tokenizer.pad_token = embeddings.client.tokenizer.eos_token
             
             # 5. Process in batches
             vectorstore = None
             batch_size = self.batch_size
+
+            logger.warning("DEBUG TYPES:")
+            logger.warning(f"type(unique_splits): {type(unique_splits)}")
+            logger.warning(f"type(unique_splits[0]): {type(unique_splits[0])}")
+            logger.warning(f"batch_size: {self.batch_size} ({type(self.batch_size)})")
+
             
             print(f"Processing {len(unique_splits)} documents in batches of {batch_size}")
             for i in tqdm(range(0, len(unique_splits), batch_size)):
